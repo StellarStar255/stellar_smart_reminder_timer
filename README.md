@@ -23,7 +23,8 @@ A smart task timer and reminder app for macOS.
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/StellarStar255/stellar_smart_reminder_timermart_reminder_timer
+git clone https://github.com/StellarStar255/stellar_smart_reminder_timer
+cd stellar_smart_reminder_timer
 ```
 
 2. Create a virtual environment (recommended):
