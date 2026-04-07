@@ -60,6 +60,7 @@ class Database:
                 is_default INTEGER DEFAULT 0,
                 sort_order INTEGER DEFAULT 0,
                 use_count INTEGER DEFAULT 0,
+                star_rating INTEGER DEFAULT 0,
                 FOREIGN KEY (category_id) REFERENCES categories(id)
             )
         """)
@@ -137,6 +138,12 @@ class Database:
 
         try:
             self.connection.execute("ALTER TABLE presets ADD COLUMN last_used_at TEXT")
+            self.connection.commit()
+        except Exception:
+            pass  # Column already exists
+
+        try:
+            self.connection.execute("ALTER TABLE presets ADD COLUMN star_rating INTEGER DEFAULT 0")
             self.connection.commit()
         except Exception:
             pass  # Column already exists

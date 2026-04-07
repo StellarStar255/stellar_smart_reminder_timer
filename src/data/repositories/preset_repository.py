@@ -17,10 +17,10 @@ class PresetRepository:
         """Create a new preset."""
         cursor = self.db.execute(
             """INSERT INTO presets (name, duration_seconds, category_id,
-               is_default, sort_order, use_count)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               is_default, sort_order, use_count, star_rating)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (preset.name, preset.duration_seconds, preset.category_id,
-             preset.is_default, preset.sort_order, preset.use_count)
+             preset.is_default, preset.sort_order, preset.use_count, preset.star_rating)
         )
         self.db.commit()
         preset.id = cursor.lastrowid
@@ -30,10 +30,10 @@ class PresetRepository:
         """Update an existing preset."""
         self.db.execute(
             """UPDATE presets SET name=?, duration_seconds=?, category_id=?,
-               sort_order=?, use_count=?
+               sort_order=?, use_count=?, star_rating=?
                WHERE id=?""",
             (preset.name, preset.duration_seconds, preset.category_id,
-             preset.sort_order, preset.use_count, preset.id)
+             preset.sort_order, preset.use_count, preset.star_rating, preset.id)
         )
         self.db.commit()
         return preset
@@ -142,4 +142,5 @@ class PresetRepository:
             sort_order=row['sort_order'],
             use_count=row['use_count'],
             last_used_at=row['last_used_at'],
+            star_rating=(row['star_rating'] if 'star_rating' in row.keys() else 0) or 0,
         )

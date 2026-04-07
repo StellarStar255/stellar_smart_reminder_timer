@@ -64,11 +64,22 @@ class PresetButton(QPushButton):
         """Update label with rich text, count in small gray."""
         name_color = "#ffffff" if self._dark_mode else "#1d1d1f"
         count_color = "#888888" if self._dark_mode else "#b0b0b0"
+        star_color = "#FFB800"
         name = self.preset.name
         duration = self.preset.format_duration()
 
+        rating = max(0, min(5, getattr(self.preset, 'star_rating', 0) or 0))
+        stars_html = ""
+        if rating > 0:
+            stars_html = (
+                f'<div style="text-align:center; line-height:10px; margin-bottom:1px;">'
+                f'<span style="color:{star_color}; font-size:10px;">{"★" * rating}</span>'
+                f'</div>'
+            )
+
         if self.preset.use_count > 0:
             html = (
+                f'{stars_html}'
                 f'<div style="text-align:center;">'
                 f'<span style="color:{name_color}; font-size:14px;">{name}</span><br/>'
                 f'<span style="color:{name_color}; font-size:13px;">{duration}</span>'
@@ -77,6 +88,7 @@ class PresetButton(QPushButton):
             )
         else:
             html = (
+                f'{stars_html}'
                 f'<div style="text-align:center;">'
                 f'<span style="color:{name_color}; font-size:14px;">{name}</span><br/>'
                 f'<span style="color:{name_color}; font-size:13px;">{duration}</span>'
@@ -463,6 +475,14 @@ class EditPresetDialog(QDialog):
         layout.addWidget(category_label)
         layout.addWidget(self.category_combo)
 
+        # Star rating (importance)
+        star_label = QLabel("重要性 (0-5 星)")
+        self.star_input = QSpinBox()
+        self.star_input.setRange(0, 5)
+        self.star_input.setValue(getattr(self.preset, 'star_rating', 0) or 0)
+        layout.addWidget(star_label)
+        layout.addWidget(self.star_input)
+
         # Buttons
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok |
@@ -482,6 +502,7 @@ class EditPresetDialog(QDialog):
             'name': name,
             'duration_seconds': self.duration_input.value() * 60,
             'category_id': self.category_combo.currentData(),
+            'star_rating': self.star_input.value(),
         }
         self.accept()
 

@@ -17,6 +17,7 @@ class Preset:
     sort_order: int = 0
     use_count: int = 0  # Track usage for smart recommendations
     last_used_at: Optional[str] = None  # ISO timestamp of last usage
+    star_rating: int = 0  # Importance rating, 0-5 stars
 
     @property
     def duration_minutes(self) -> int:
@@ -45,6 +46,7 @@ class Preset:
             'sort_order': self.sort_order,
             'use_count': self.use_count,
             'last_used_at': self.last_used_at,
+            'star_rating': self.star_rating,
         }
 
     @classmethod
@@ -59,6 +61,7 @@ class Preset:
             sort_order=data.get('sort_order', 0),
             use_count=data.get('use_count', 0),
             last_used_at=data.get('last_used_at'),
+            star_rating=data.get('star_rating', 0),
         )
 
 

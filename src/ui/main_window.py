@@ -515,6 +515,7 @@ class MainWindow(QMainWindow):
                 preset.name = result['name']
                 preset.duration_seconds = result['duration_seconds']
                 preset.category_id = result['category_id']
+                preset.star_rating = result.get('star_rating', 0)
                 self.preset_manager.update(preset)
                 self._refresh_presets()
 
