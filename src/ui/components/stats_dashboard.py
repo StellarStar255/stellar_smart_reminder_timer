@@ -486,6 +486,7 @@ class TaskTreeMap(QWidget):
     hidden_tasks_changed = pyqtSignal(set)
     notebook_requested = pyqtSignal(str)  # task_name, emitted on double-click
     continue_task_requested = pyqtSignal(str)  # task_name, emitted from context menu
+    star_rating_changed = pyqtSignal(str, int)  # task_name, rating (0-5)
 
     BLOCK_COLORS = TaskBarChart.BAR_COLORS
 
@@ -495,6 +496,7 @@ class TaskTreeMap(QWidget):
         self._data: List[TaskTimeStats] = []
         self._hidden_tasks: set = set()
         self._block_rects: list = []  # (QRectF, task_name) for hit-testing
+        self._star_ratings: dict = {}  # task_name -> 0..5
         self._dark_mode = False
         self._anim_progress = 0.0
         self.setMinimumHeight(200)
@@ -531,6 +533,11 @@ class TaskTreeMap(QWidget):
 
     def set_dark_mode(self, enabled: bool):
         self._dark_mode = enabled
+        self.update()
+
+    def set_star_ratings(self, ratings: dict):
+        """Set the task-name -> star rating mapping."""
+        self._star_ratings = dict(ratings) if ratings else {}
         self.update()
 
     # ---- squarified treemap layout ----
@@ -690,6 +697,14 @@ class TaskTreeMap(QWidget):
             continue_action = menu.addAction("▶ 继续")
             continue_action.setData(("continue", task_name))
             menu.addSeparator()
+            current_rating = int(self._star_ratings.get(task_name, 0) or 0)
+            star_menu = menu.addMenu(f"重要性 ({'★' * current_rating}{'☆' * (5 - current_rating)})")
+            star_menu.setStyleSheet(menu.styleSheet())
+            for r in range(0, 6):
+                label = "无" if r == 0 else "★" * r
+                act = star_menu.addAction(label)
+                act.setData(("rate", task_name, r))
+            menu.addSeparator()
             copy_action = menu.addAction("复制项目名")
             copy_action.setData(("copy_name", task_name))
             hide_action = menu.addAction("隐藏")
@@ -712,7 +727,18 @@ class TaskTreeMap(QWidget):
 
         action = menu.exec(self.mapToGlobal(pos))
         if action and action.data():
-            cmd, name = action.data()
+            data = action.data()
+            cmd = data[0]
+            if cmd == "rate":
+                _, name, rating = data
+                if rating <= 0:
+                    self._star_ratings.pop(name, None)
+                else:
+                    self._star_ratings[name] = rating
+                self.star_rating_changed.emit(name, rating)
+                self.update()
+                return
+            name = data[1]
             if cmd == "continue":
                 self.continue_task_requested.emit(name)
                 return
@@ -806,6 +832,24 @@ class TaskTreeMap(QWidget):
             # Draw labels inside the block (only if block is large enough)
             if anim < 0.5:
                 continue
+
+            # Draw star rating in top-right corner
+            rating = int(self._star_ratings.get(stat.task_name, 0) or 0)
+            if rating > 0 and inset.width() > 40 and inset.height() > 22:
+                star_size = max(9, min(13, int(min(inset.width(), inset.height()) * 0.16)))
+                star_text = "★" * rating
+                painter.setFont(QFont(".AppleSystemUIFont", star_size, QFont.Weight.Bold))
+                fm = painter.fontMetrics()
+                tw = fm.horizontalAdvance(star_text)
+                th = fm.height()
+                sx = inset.right() - tw - 6
+                sy = inset.top() + 4
+                star_rect = QRectF(sx, sy, tw, th)
+                # shadow
+                painter.setPen(QColor(0, 0, 0, 120))
+                painter.drawText(star_rect.translated(1, 1), Qt.AlignmentFlag.AlignCenter, star_text)
+                painter.setPen(QColor("#FFD700"))
+                painter.drawText(star_rect, Qt.AlignmentFlag.AlignCenter, star_text)
 
             label_alpha = min(255, int((anim - 0.5) * 2 * 255))
             text_color = QColor("#ffffff")
@@ -909,6 +953,7 @@ class StatsDashboard(QWidget):
     ]
 
     SETTINGS_KEY = "hidden_chart_tasks"
+    STAR_RATINGS_KEY = "task_star_ratings"
 
     def __init__(self, db: Optional[Database] = None, parent=None):
         super().__init__(parent)
@@ -921,6 +966,7 @@ class StatsDashboard(QWidget):
         self._chart_mode = "bar"  # "bar" or "pie"
         self._setup_ui()
         self._load_hidden_tasks()
+        self._load_star_ratings()
 
     def _setup_ui(self):
         """Set up the dashboard UI."""
@@ -1045,6 +1091,7 @@ class StatsDashboard(QWidget):
         self.task_treemap.notebook_requested.connect(self.notebook_requested)
         self.task_bar_chart.continue_task_requested.connect(self.continue_task_requested)
         self.task_treemap.continue_task_requested.connect(self.continue_task_requested)
+        self.task_treemap.star_rating_changed.connect(self._on_star_rating_changed)
         self._chart_stack.addWidget(self.task_bar_chart)   # index 0
         self._chart_stack.addWidget(self.task_treemap)   # index 1
         self._chart_stack.setCurrentIndex(0)
@@ -1100,6 +1147,32 @@ class StatsDashboard(QWidget):
         if not self._db:
             return
         self._db.set_setting(self.SETTINGS_KEY, json.dumps(sorted(hidden)))
+
+    def _load_star_ratings(self):
+        """Load task star ratings from database."""
+        if not self._db:
+            return
+        raw = self._db.get_setting(self.STAR_RATINGS_KEY, "{}")
+        try:
+            ratings = {k: int(v) for k, v in json.loads(raw).items()}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            ratings = {}
+        self.task_treemap.set_star_ratings(ratings)
+
+    def _on_star_rating_changed(self, task_name: str, rating: int):
+        """Persist star rating change."""
+        if not self._db:
+            return
+        raw = self._db.get_setting(self.STAR_RATINGS_KEY, "{}")
+        try:
+            ratings = {k: int(v) for k, v in json.loads(raw).items()}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            ratings = {}
+        if rating <= 0:
+            ratings.pop(task_name, None)
+        else:
+            ratings[task_name] = rating
+        self._db.set_setting(self.STAR_RATINGS_KEY, json.dumps(ratings, ensure_ascii=False))
 
     def _on_hidden_tasks_changed(self, hidden: set):
         """Handle hidden tasks change from either chart. Sync and persist."""
