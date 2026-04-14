@@ -390,6 +390,16 @@ class CustomTimerDialog(QDialog):
         layout.addWidget(duration_label)
         layout.addWidget(self.duration_input)
 
+        # Quick-fill duration buttons
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(8)
+        for mins in (10, 20, 30):
+            btn = QPushButton(f"{mins} 分钟")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, m=mins: self.duration_input.setValue(m))
+            quick_row.addWidget(btn)
+        layout.addLayout(quick_row)
+
         # Category
         category_label = QLabel("分类")
         self.category_combo = QComboBox()
