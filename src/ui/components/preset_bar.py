@@ -1,4 +1,5 @@
 """Preset bar widget for quick timer starts."""
+import random
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QPushButton, QDialog, QVBoxLayout,
@@ -382,10 +383,13 @@ class CustomTimerDialog(QDialog):
         layout.addWidget(self.name_input)
 
         # Duration
+        quick_options = (10, 20, 30)
         duration_label = QLabel("时长（分钟）")
         self.duration_input = QSpinBox()
         self.duration_input.setRange(1, 480)  # 1 min to 8 hours
-        self.duration_input.setValue(25)
+        # Randomly pre-fill from the quick options so different timers stagger
+        # by default; the user can still tweak the value before confirming.
+        self.duration_input.setValue(random.choice(quick_options))
         self.duration_input.setSuffix("")
         layout.addWidget(duration_label)
         layout.addWidget(self.duration_input)
@@ -393,7 +397,7 @@ class CustomTimerDialog(QDialog):
         # Quick-fill duration buttons
         quick_row = QHBoxLayout()
         quick_row.setSpacing(8)
-        for mins in (10, 20, 30):
+        for mins in quick_options:
             btn = QPushButton(f"{mins} 分钟")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda _=False, m=mins: self.duration_input.setValue(m))
