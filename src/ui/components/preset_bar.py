@@ -14,7 +14,7 @@ from typing import List
 
 # Extended duration options (label, minutes) for the custom timer dropdown.
 LONG_DURATION_OPTIONS = [
-    ("1 小时", 60),
+    ("24 小时", 24 * 60),
     ("2 小时", 120),
     ("3 小时", 180),
     ("5 小时", 300),
