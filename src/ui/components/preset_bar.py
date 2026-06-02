@@ -12,6 +12,24 @@ from src.models import Preset, Category
 from typing import List
 
 
+# Extended duration options (label, minutes) for the custom timer dropdown.
+LONG_DURATION_OPTIONS = [
+    ("1 小时", 60),
+    ("2 小时", 120),
+    ("3 小时", 180),
+    ("5 小时", 300),
+    ("8 小时", 480),
+    ("12 小时", 720),
+    ("14 小时", 840),
+    ("2 天", 2 * 24 * 60),
+    ("3 天", 3 * 24 * 60),
+    ("5 天", 5 * 24 * 60),
+    ("1 周", 7 * 24 * 60),
+    ("2 周", 14 * 24 * 60),
+    ("1 个月", 30 * 24 * 60),
+]
+
+
 class PresetButton(QPushButton):
     """A styled button for preset quick-start."""
 
@@ -386,7 +404,7 @@ class CustomTimerDialog(QDialog):
         quick_options = (10, 20, 30)
         duration_label = QLabel("时长（分钟）")
         self.duration_input = QSpinBox()
-        self.duration_input.setRange(1, 480)  # 1 min to 8 hours
+        self.duration_input.setRange(1, 43200)  # 1 min to 1 month (30 days)
         # Randomly pre-fill from the quick options so different timers stagger
         # by default; the user can still tweak the value before confirming.
         self.duration_input.setValue(random.choice(quick_options))
@@ -404,6 +422,16 @@ class CustomTimerDialog(QDialog):
             quick_row.addWidget(btn)
         layout.addLayout(quick_row)
 
+        # Extended-duration dropdown for longer timers
+        self.duration_preset_combo = QComboBox()
+        self.duration_preset_combo.addItem("更多时长...", None)
+        for label, mins in LONG_DURATION_OPTIONS:
+            self.duration_preset_combo.addItem(label, mins)
+        self.duration_preset_combo.currentIndexChanged.connect(
+            self._on_duration_preset_changed
+        )
+        layout.addWidget(self.duration_preset_combo)
+
         # Category
         category_label = QLabel("分类")
         self.category_combo = QComboBox()
@@ -420,6 +448,16 @@ class CustomTimerDialog(QDialog):
         button_box.accepted.connect(self._on_accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
+
+    def _on_duration_preset_changed(self, index: int):
+        """Apply a selected extended-duration option to the spinbox."""
+        mins = self.duration_preset_combo.itemData(index)
+        if mins is not None:
+            self.duration_input.setValue(mins)
+        # Reset back to the placeholder so the same option can be picked again.
+        self.duration_preset_combo.blockSignals(True)
+        self.duration_preset_combo.setCurrentIndex(0)
+        self.duration_preset_combo.blockSignals(False)
 
     def _on_accept(self):
         """Handle dialog acceptance."""
