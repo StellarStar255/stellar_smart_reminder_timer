@@ -526,7 +526,7 @@ class MainWindow(QMainWindow):
             return
 
         categories = list(self._categories.values())
-        dialog = EditTimerDialog(task, categories, self)
+        dialog = EditTimerDialog(task, categories, self, dark_mode=self._dark_mode)
 
         if dialog.exec():
             result = dialog.get_result()

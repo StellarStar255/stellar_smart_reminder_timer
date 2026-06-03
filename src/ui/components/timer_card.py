@@ -314,7 +314,7 @@ class TimerCard(QFrame):
 class EditTimerDialog(QDialog):
     """Dialog for editing a running/paused timer."""
 
-    def __init__(self, task: Task, categories: List[Category], parent=None):
+    def __init__(self, task: Task, categories: List[Category], parent=None, dark_mode: bool = False):
         super().__init__(parent)
 
         self.task = task
@@ -322,6 +322,15 @@ class EditTimerDialog(QDialog):
         self.result_data = None
 
         self._setup_ui()
+        # Reuse the shared theme-aware dialog styling so this matches the other
+        # dialogs and stays readable in dark mode.
+        from src.ui.components.preset_bar import _apply_dialog_theme
+        _apply_dialog_theme(self, dark_mode)
+        # Re-apply the secondary tint to the elapsed-time hint after theming.
+        hint_color = "#98989d" if dark_mode else "#6e6e73"
+        self.info_label.setStyleSheet(
+            f"QLabel {{ font-size: 12px; color: {hint_color}; background: transparent; }}"
+        )
 
     def _setup_ui(self):
         """Set up the dialog UI."""
@@ -351,9 +360,9 @@ class EditTimerDialog(QDialog):
         # Info about elapsed time
         elapsed_mins = self.task.elapsed_seconds // 60
         elapsed_secs = self.task.elapsed_seconds % 60
-        info_label = QLabel(f"已计时: {elapsed_mins}分{elapsed_secs}秒")
-        info_label.setStyleSheet("QLabel { font-size: 12px; color: #6e6e73; }")
-        layout.addWidget(info_label)
+        self.info_label = QLabel(f"已计时: {elapsed_mins}分{elapsed_secs}秒")
+        self.info_label.setStyleSheet("QLabel { font-size: 12px; color: #6e6e73; }")
+        layout.addWidget(self.info_label)
 
         # Category
         category_label = QLabel("分类")
@@ -375,26 +384,6 @@ class EditTimerDialog(QDialog):
         button_box.accepted.connect(self._on_accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
-
-        # Style
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #ffffff;
-            }
-            QLabel {
-                font-size: 13px;
-                color: #1d1d1f;
-            }
-            QLineEdit, QSpinBox, QComboBox {
-                padding: 8px;
-                border: 1px solid #d2d2d7;
-                border-radius: 6px;
-                font-size: 13px;
-            }
-            QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
-                border-color: #007AFF;
-            }
-        """)
 
     def _on_accept(self):
         """Handle dialog acceptance."""
