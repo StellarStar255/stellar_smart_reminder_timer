@@ -41,8 +41,10 @@ class PresetButton(QPushButton):
         self.preset = preset
         self._dark_mode = False
 
-        self.setMinimumWidth(110)
-        self.setMinimumHeight(56)
+        # Fixed size so every preset box lines up uniformly; long names are
+        # elided with an ellipsis instead of overflowing into the next box.
+        self.setFixedWidth(120)
+        self.setFixedHeight(58)
 
         # Use a layout with QLabel for rich text (styled count)
         btn_layout = QVBoxLayout(self)
@@ -55,6 +57,9 @@ class PresetButton(QPushButton):
         self._label.setStyleSheet("background: transparent; border: none;")
         self._update_label_text()
         btn_layout.addWidget(self._label)
+
+        # Full name on hover, since long names get elided in the box.
+        self.setToolTip(preset.name)
 
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
@@ -79,13 +84,23 @@ class PresetButton(QPushButton):
             }}
         """)
 
+    def _elide_name(self, name: str) -> str:
+        """Truncate an overly long preset name to fit the fixed button width."""
+        from PyQt6.QtGui import QFontMetrics, QFont
+        font = QFont(self.font())
+        font.setPixelSize(14)
+        # Available text width = fixed width minus horizontal padding & border.
+        avail = self.width() - 28 if self.width() > 40 else 92
+        return QFontMetrics(font).elidedText(name, Qt.TextElideMode.ElideRight, avail)
+
     def _update_label_text(self):
         """Update label with rich text, count in small gray."""
+        import html
         name_color = "#ffffff" if self._dark_mode else "#1d1d1f"
         count_color = "#888888" if self._dark_mode else "#b0b0b0"
         star_color = "#FFB800"
-        name = self.preset.name
-        duration = self.preset.format_duration()
+        name = html.escape(self._elide_name(self.preset.name))
+        duration = html.escape(self.preset.format_duration())
 
         rating = max(0, min(5, getattr(self.preset, 'star_rating', 0) or 0))
         stars_html = ""
