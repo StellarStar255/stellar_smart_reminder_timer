@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import (
     QKeySequence, QShortcut, QDesktopServices,
     QTextCursor, QTextCharFormat, QColor, QFont, QSyntaxHighlighter,
+    QPixmap, QIcon, QPainter,
 )
 
 from src.data.database import Database
@@ -29,6 +30,19 @@ HIGHLIGHT_COLORS = [
     ("橙色", "#ffd9a8"),
     ("紫色", "#e3ccff"),
 ]
+
+
+def _color_swatch(hex_color: str, size: int = 14) -> QIcon:
+    """Build a small rounded color-swatch icon for menu entries."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor(hex_color))
+    painter.setPen(QColor(0, 0, 0, 60))
+    painter.drawRoundedRect(0, 0, size - 1, size - 1, 3, 3)
+    painter.end()
+    return QIcon(pm)
 
 
 class _LinkHighlighter(QSyntaxHighlighter):
@@ -309,14 +323,14 @@ class TaskNotebookDialog(QDialog):
         strike_action.setCheckable(True)
         strike_action.setChecked(cur_fmt.fontStrikeOut())
 
-        highlight_menu = menu.addMenu("高亮颜色")
+        menu.addSeparator()
         color_actions = {}
         for label, hex_color in HIGHLIGHT_COLORS:
-            act = highlight_menu.addAction(label)
+            act = menu.addAction(_color_swatch(hex_color), f"高亮 · {label}")
             color_actions[act] = hex_color
-        highlight_menu.addSeparator()
-        clear_highlight_action = highlight_menu.addAction("清除高亮")
+        clear_highlight_action = menu.addAction("清除高亮")
 
+        menu.addSeparator()
         clear_all_action = menu.addAction("清除所有格式")
 
         # --- Timestamp / link ------------------------------------------
