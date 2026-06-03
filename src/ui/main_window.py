@@ -413,6 +413,7 @@ class MainWindow(QMainWindow):
         card.stop_clicked.connect(self._on_card_stop)
         card.edit_requested.connect(self._on_card_edit)
         card.notebook_requested.connect(self._on_notebook_requested)
+        card.name_edited.connect(self._on_card_name_edited)
         card.set_dark_mode(self._dark_mode)
 
         # Add to layout before stretch
@@ -544,6 +545,14 @@ class MainWindow(QMainWindow):
                     category = self._categories.get(task.category_id)
                     self._timer_cards[task_id].set_category(category)
                     self._timer_cards[task_id].update_task(task)
+
+    def _on_card_name_edited(self, task_id: int, new_name: str):
+        """Persist an inline rename from a timer card."""
+        task = self.timer_engine.get_task(task_id)
+        if not task:
+            return
+        task.name = new_name
+        self.task_repo.update(task)
 
     def _on_period_changed(self, days: int):
         """Handle task distribution period change."""

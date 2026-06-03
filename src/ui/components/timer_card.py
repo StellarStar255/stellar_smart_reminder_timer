@@ -21,12 +21,14 @@ class TimerCard(QFrame):
     delete_clicked = pyqtSignal(int)  # task_id
     edit_requested = pyqtSignal(int)  # task_id
     notebook_requested = pyqtSignal(str)  # task_name
+    name_edited = pyqtSignal(int, str)  # task_id, new_name
 
     def __init__(self, task: Task, category: Category = None, parent=None):
         super().__init__(parent)
 
         self.task = task
         self.category = category
+        self._dark_mode = False
 
         self._setup_ui()
         self._update_display()
@@ -91,6 +93,16 @@ class TimerCard(QFrame):
             }
         """)
         layout.addWidget(self.name_label)
+
+        # Inline name editor (hidden until the name is double-clicked)
+        self.name_edit = QLineEdit()
+        self.name_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.name_edit.setFixedHeight(44)
+        self.name_edit.hide()
+        self.name_edit.returnPressed.connect(self._commit_name_edit)
+        self.name_edit.editingFinished.connect(self._commit_name_edit)
+        self.name_edit.installEventFilter(self)
+        layout.addWidget(self.name_edit)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -226,12 +238,58 @@ class TimerCard(QFrame):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        """Open notebook on double-click on empty area."""
+        """Double-click the name to rename inline; elsewhere opens the notebook."""
         child = self.childAt(event.pos())
+        # Double-clicking the name (label or its reserved area) edits it inline.
+        if child is self.name_label or self._is_in_name_area(event.pos()):
+            self._start_name_edit()
+            return
         if child in (self.toggle_btn, self.stop_btn, self.progress):
             super().mouseDoubleClickEvent(event)
             return
         self.notebook_requested.emit(self.task.name)
+
+    def _is_in_name_area(self, pos):
+        """Whether a point falls within the name label's row."""
+        geo = self.name_label.geometry()
+        return geo.top() <= pos.y() <= geo.bottom()
+
+    def _start_name_edit(self):
+        """Switch the name label to an editable line edit."""
+        self.name_edit.setText(self.task.name)
+        self._apply_name_edit_style()
+        self.name_label.hide()
+        self.name_edit.show()
+        self.name_edit.setFocus()
+        self.name_edit.selectAll()
+
+    def _commit_name_edit(self):
+        """Persist the inline-edited name and restore the label."""
+        if not self.name_edit.isVisible():
+            return
+        # Block re-entrancy: editingFinished fires again when we hide the editor.
+        self.name_edit.blockSignals(True)
+        new_name = self.name_edit.text().strip()
+        self.name_edit.hide()
+        self.name_label.show()
+        self.name_edit.blockSignals(False)
+
+        if new_name and new_name != self.task.name:
+            self.task.name = new_name
+            self.name_label.setText(new_name)
+            self.name_edited.emit(self.task.id, new_name)
+
+    def eventFilter(self, obj, event):
+        """Cancel an in-progress inline rename when Escape is pressed."""
+        from PyQt6.QtCore import QEvent
+        if obj is self.name_edit and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.name_edit.blockSignals(True)
+                self.name_edit.hide()
+                self.name_label.show()
+                self.name_edit.blockSignals(False)
+                return True
+        return super().eventFilter(obj, event)
 
     def _show_context_menu(self, pos):
         """Show right-click context menu for the timer card."""
@@ -256,8 +314,27 @@ class TimerCard(QFrame):
         elif action == stop_action:
             self.stop_clicked.emit(self.task.id)
 
+    def _apply_name_edit_style(self):
+        """Style the inline name editor to match the current theme."""
+        if self._dark_mode:
+            text, bg, border = "#ffffff", "#3a3a3c", "#0a84ff"
+        else:
+            text, bg, border = "#1d1d1f", "#ffffff", "#007AFF"
+        self.name_edit.setStyleSheet(f"""
+            QLineEdit {{
+                font-size: 15px;
+                font-weight: 500;
+                color: {text};
+                background-color: {bg};
+                border: 1px solid {border};
+                border-radius: 6px;
+                padding: 4px 8px;
+            }}
+        """)
+
     def set_dark_mode(self, enabled: bool):
         """Toggle dark mode styling."""
+        self._dark_mode = enabled
         if enabled:
             self.setStyleSheet("""
                 QFrame#timerCard {
