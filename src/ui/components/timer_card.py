@@ -63,6 +63,7 @@ class TimerCard(QFrame):
             QLabel {
                 font-size: 12px;
                 color: #6e6e73;
+                background: transparent;
             }
         """)
         layout.addWidget(self.category_label, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -78,11 +79,15 @@ class TimerCard(QFrame):
         self.name_label = QLabel()
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.name_label.setWordWrap(True)
+        # Reserve room for two lines so cards with short and long names keep
+        # their buttons aligned at the same height.
+        self.name_label.setFixedHeight(44)
         self.name_label.setStyleSheet("""
             QLabel {
                 font-size: 15px;
                 font-weight: 500;
                 color: #1d1d1f;
+                background: transparent;
             }
         """)
         layout.addWidget(self.name_label)
@@ -270,12 +275,14 @@ class TimerCard(QFrame):
                     font-size: 15px;
                     font-weight: 500;
                     color: #ffffff;
+                    background: transparent;
                 }
             """)
             self.category_label.setStyleSheet("""
                 QLabel {
                     font-size: 12px;
                     color: #8e8e93;
+                    background: transparent;
                 }
             """)
             self.progress.setTrackColor("#48484a")
@@ -298,12 +305,14 @@ class TimerCard(QFrame):
                     font-size: 15px;
                     font-weight: 500;
                     color: #1d1d1f;
+                    background: transparent;
                 }
             """)
             self.category_label.setStyleSheet("""
                 QLabel {
                     font-size: 12px;
                     color: #6e6e73;
+                    background: transparent;
                 }
             """)
             self.progress.setTrackColor("#e5e5ea")
