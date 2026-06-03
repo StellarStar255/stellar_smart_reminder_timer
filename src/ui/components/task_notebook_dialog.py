@@ -4,10 +4,10 @@ import re
 from datetime import datetime
 
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QLabel
-from PyQt6.QtCore import Qt, QEvent, QTimer, QUrl
+from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import (
     QKeySequence, QShortcut, QDesktopServices,
-    QTextCursor, QTextCharFormat, QColor,
+    QTextCursor, QTextCharFormat, QColor, QFont, QSyntaxHighlighter,
 )
 
 from src.data.database import Database
@@ -18,81 +18,52 @@ URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Highlight (highlighter-pen) background colors. Paired with a fixed dark
+# foreground so highlighted text stays readable in both light and dark mode.
+HIGHLIGHT_FG = "#1d1d1f"
+HIGHLIGHT_COLORS = [
+    ("黄色", "#fff3a0"),
+    ("绿色", "#c2f0c2"),
+    ("蓝色", "#bfe3ff"),
+    ("粉色", "#ffc9d6"),
+    ("橙色", "#ffd9a8"),
+    ("紫色", "#e3ccff"),
+]
 
-class _NotebookTextEdit(QTextEdit):
-    """QTextEdit that auto-highlights URLs and opens them on Alt(Option)+click."""
+
+class _LinkHighlighter(QSyntaxHighlighter):
+    """Overlays blue/underlined formatting on URLs for display only.
+
+    Because this is a syntax highlighter, the formatting is applied at render
+    time and is *not* stored in the document's character formats. That means it
+    never clobbers user formatting (bold/strikethrough/highlight) and is never
+    written out by ``toHtml()``.
+    """
 
     LINK_COLOR = "#0a84ff"
 
+    def highlightBlock(self, text: str):
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(self.LINK_COLOR))
+        fmt.setFontUnderline(True)
+        for m in URL_PATTERN.finditer(text):
+            self.setFormat(m.start(), m.end() - m.start(), fmt)
+
+
+class _NotebookTextEdit(QTextEdit):
+    """Rich-text QTextEdit that auto-highlights URLs and opens them on
+    Alt(Option)+click, and supports bold / strikethrough / color highlight."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._default_color = QColor("#1d1d1f")
         self._current_cursor_shape = Qt.CursorShape.IBeamCursor
-        self._highlighting = False
 
         self.setMouseTracking(True)
-        self.setAcceptRichText(False)
+        self.setAcceptRichText(True)
 
-        self._highlight_timer = QTimer(self)
-        self._highlight_timer.setSingleShot(True)
-        self._highlight_timer.setInterval(150)
-        self._highlight_timer.timeout.connect(self._highlight_links)
-        self.textChanged.connect(self._on_text_changed)
+        self._link_highlighter = _LinkHighlighter(self.document())
 
-    def set_default_text_color(self, color: QColor):
-        self._default_color = color
-        self._highlight_links()
-
-    def _on_text_changed(self):
-        if self._highlighting:
-            return
-        self._highlight_timer.start()
-
-    def _highlight_links(self):
-        """Apply blue/underlined formatting to all URLs in the document."""
-        if self._highlighting:
-            return
-        self._highlighting = True
-
-        doc = self.document()
-        plain = self.toPlainText()
-        text_len = len(plain)
-
-        saved = self.textCursor()
-        saved_anchor = saved.anchor()
-        saved_pos = saved.position()
-
-        try:
-            cursor = QTextCursor(doc)
-            cursor.beginEditBlock()
-
-            cursor.select(QTextCursor.SelectionType.Document)
-            base_fmt = QTextCharFormat()
-            base_fmt.setForeground(self._default_color)
-            base_fmt.setFontUnderline(False)
-            cursor.setCharFormat(base_fmt)
-
-            link_color = QColor(self.LINK_COLOR)
-            for m in URL_PATTERN.finditer(plain):
-                c = QTextCursor(doc)
-                c.setPosition(m.start())
-                c.setPosition(m.end(), QTextCursor.MoveMode.KeepAnchor)
-                fmt = QTextCharFormat()
-                fmt.setForeground(link_color)
-                fmt.setFontUnderline(True)
-                c.setCharFormat(fmt)
-
-            cursor.endEditBlock()
-
-            new_cursor = self.textCursor()
-            new_cursor.setPosition(min(saved_anchor, text_len))
-            new_cursor.setPosition(
-                min(saved_pos, text_len),
-                QTextCursor.MoveMode.KeepAnchor,
-            )
-            self.setTextCursor(new_cursor)
-        finally:
-            self._highlighting = False
+    # ----- URL handling -------------------------------------------------
 
     def _url_at_position(self, pos):
         cursor = self.cursorForPosition(pos)
@@ -132,6 +103,79 @@ class _NotebookTextEdit(QTextEdit):
             self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
             self._current_cursor_shape = Qt.CursorShape.IBeamCursor
         super().leaveEvent(event)
+
+    # ----- Rich-text formatting ----------------------------------------
+
+    def _merge_format(self, fmt: QTextCharFormat):
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            cursor.mergeCharFormat(fmt)
+        else:
+            # No selection: apply to the format used for subsequent typing.
+            self.mergeCurrentCharFormat(fmt)
+
+    def toggle_bold(self):
+        is_bold = self.textCursor().charFormat().fontWeight() >= QFont.Weight.Bold
+        fmt = QTextCharFormat()
+        fmt.setFontWeight(QFont.Weight.Normal if is_bold else QFont.Weight.Bold)
+        self._merge_format(fmt)
+
+    def toggle_strikethrough(self):
+        is_struck = self.textCursor().charFormat().fontStrikeOut()
+        fmt = QTextCharFormat()
+        fmt.setFontStrikeOut(not is_struck)
+        self._merge_format(fmt)
+
+    def apply_highlight(self, color_hex: str):
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor(color_hex))
+        fmt.setForeground(QColor(HIGHLIGHT_FG))
+        self._merge_format(fmt)
+
+    def clear_highlight(self):
+        self._clear_selection_format(clear_bg=True, clear_fg=True)
+
+    def clear_all_formatting(self):
+        self._clear_selection_format(
+            clear_bg=True, clear_fg=True, clear_bold=True, clear_strike=True,
+        )
+
+    def _clear_selection_format(self, clear_bg=False, clear_fg=False,
+                                clear_bold=False, clear_strike=False):
+        """Remove formatting properties across the selection while preserving
+        the ones not being cleared (works per-fragment so mixed runs survive)."""
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return
+        start, end = cursor.selectionStart(), cursor.selectionEnd()
+        doc = self.document()
+
+        editor_cursor = QTextCursor(doc)
+        editor_cursor.beginEditBlock()
+        block = doc.findBlock(start)
+        while block.isValid() and block.position() < end:
+            it = block.begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                fs = frag.position()
+                fe = fs + frag.length()
+                if fe > start and fs < end:
+                    fmt = QTextCharFormat(frag.charFormat())
+                    if clear_bg:
+                        fmt.clearBackground()
+                    if clear_fg:
+                        fmt.clearForeground()
+                    if clear_bold:
+                        fmt.setFontWeight(QFont.Weight.Normal)
+                    if clear_strike:
+                        fmt.setFontStrikeOut(False)
+                    seg = QTextCursor(doc)
+                    seg.setPosition(max(fs, start))
+                    seg.setPosition(min(fe, end), QTextCursor.MoveMode.KeepAnchor)
+                    seg.setCharFormat(fmt)
+                it += 1
+            block = block.next()
+        editor_cursor.endEditBlock()
 
 
 class TaskNotebookDialog(QDialog):
@@ -178,27 +222,19 @@ class TaskNotebookDialog(QDialog):
         self._editor = _NotebookTextEdit()
         self._editor.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._editor.customContextMenuRequested.connect(self._show_editor_context_menu)
-        self._editor.setPlaceholderText("在此输入笔记...(按住 Option/Alt 点击链接以打开)")
-        self._editor.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #d2d2d7;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 14px;
-                color: #1d1d1f;
-                background-color: #ffffff;
-            }
-            QTextEdit:focus {
-                border-color: #007AFF;
-            }
-        """)
+        self._editor.setPlaceholderText(
+            "在此输入笔记...(选中文字后右键可设置格式;按住 Option/Alt 点击链接以打开)"
+        )
         layout.addWidget(self._editor, 1)
 
     def _load_content(self):
-        """Load notebook content from database."""
+        """Load notebook content from database (HTML or legacy plain text)."""
         content = self._db.get_notebook(self._task_name)
-        self._editor.setPlainText(content)
-        self._editor._highlight_links()
+        stripped = content.lstrip()
+        if stripped.startswith("<!DOCTYPE") or stripped.lower().startswith("<html"):
+            self._editor.setHtml(content)
+        else:
+            self._editor.setPlainText(content)
 
     def set_dark_mode(self, enabled: bool):
         """Apply dark or light mode styling."""
@@ -229,7 +265,6 @@ class TaskNotebookDialog(QDialog):
                     border-color: #0a84ff;
                 }
             """)
-            self._editor.set_default_text_color(QColor("#ffffff"))
         else:
             self.setStyleSheet("""
                 QDialog {
@@ -256,11 +291,35 @@ class TaskNotebookDialog(QDialog):
                     border-color: #007AFF;
                 }
             """)
-            self._editor.set_default_text_color(QColor("#1d1d1f"))
 
     def _show_editor_context_menu(self, pos):
-        """Show custom context menu with timestamp option."""
+        """Show custom context menu with formatting and timestamp options."""
         menu = self._editor.createStandardContextMenu()
+
+        # --- Formatting -------------------------------------------------
+        menu.addSeparator()
+
+        cur_fmt = self._editor.textCursor().charFormat()
+
+        bold_action = menu.addAction("加粗")
+        bold_action.setCheckable(True)
+        bold_action.setChecked(cur_fmt.fontWeight() >= QFont.Weight.Bold)
+
+        strike_action = menu.addAction("删除线")
+        strike_action.setCheckable(True)
+        strike_action.setChecked(cur_fmt.fontStrikeOut())
+
+        highlight_menu = menu.addMenu("高亮颜色")
+        color_actions = {}
+        for label, hex_color in HIGHLIGHT_COLORS:
+            act = highlight_menu.addAction(label)
+            color_actions[act] = hex_color
+        highlight_menu.addSeparator()
+        clear_highlight_action = highlight_menu.addAction("清除高亮")
+
+        clear_all_action = menu.addAction("清除所有格式")
+
+        # --- Timestamp / link ------------------------------------------
         menu.addSeparator()
         timestamp_action = menu.addAction("插入时间戳")
 
@@ -271,14 +330,30 @@ class TaskNotebookDialog(QDialog):
             open_link_action = menu.addAction("在浏览器中打开链接")
 
         action = menu.exec(self._editor.mapToGlobal(pos))
-        if action == timestamp_action:
+        if action is None:
+            return
+
+        if action == bold_action:
+            self._editor.toggle_bold()
+        elif action == strike_action:
+            self._editor.toggle_strikethrough()
+        elif action in color_actions:
+            self._editor.apply_highlight(color_actions[action])
+        elif action == clear_highlight_action:
+            self._editor.clear_highlight()
+        elif action == clear_all_action:
+            self._editor.clear_all_formatting()
+        elif action == timestamp_action:
             stamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
             self._editor.textCursor().insertText(stamp)
         elif open_link_action is not None and action == open_link_action:
             QDesktopServices.openUrl(QUrl(url))
 
     def closeEvent(self, event):
-        """Auto-save content on close."""
-        content = self._editor.toPlainText()
+        """Auto-save content on close (as HTML to preserve formatting)."""
+        if self._editor.toPlainText().strip():
+            content = self._editor.toHtml()
+        else:
+            content = ""  # keep empty notes empty rather than storing boilerplate HTML
         self._db.save_notebook(self._task_name, content)
         super().closeEvent(event)
