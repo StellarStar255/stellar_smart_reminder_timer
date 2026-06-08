@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QDialog, QLineEdit, QSpinBox, QComboBox, QDialogButtonBox, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData
-from PyQt6.QtGui import QDrag
+from PyQt6.QtGui import QDrag, QFontMetrics
 from typing import List
 
 from src.models import Task, TaskStatus, Category
@@ -153,8 +153,10 @@ class TimerCard(QFrame):
 
     def _update_display(self):
         """Update the display based on current task state."""
-        # Update name
-        self.name_label.setText(self.task.name)
+        # Update name (clamped to two lines with an ellipsis so long names
+        # stay tidy; the full name is available as a tooltip).
+        self.name_label.setText(self._elide_to_two_lines(self.task.name))
+        self.name_label.setToolTip(self.task.name)
 
         # Update category
         if self.category:
@@ -248,6 +250,30 @@ class TimerCard(QFrame):
             super().mouseDoubleClickEvent(event)
             return
         self.notebook_requested.emit(self.task.name)
+
+    def _elide_to_two_lines(self, text: str) -> str:
+        """Clamp ``text`` to at most two lines, appending an ellipsis if it
+        overflows. Keeps long task names from spilling past the card and
+        crowding the buttons."""
+        if not text:
+            return text
+        # Usable width inside the card: fixed width minus layout margins.
+        avail = self.width() - 32 if self.width() > 0 else 168
+        fm = QFontMetrics(self.name_label.font())
+
+        if fm.horizontalAdvance(text) <= avail:
+            return text  # fits on one line
+
+        # Greedily fill the first line, then put the rest on a second line
+        # that is elided if it still overflows.
+        split = len(text)
+        for i in range(1, len(text)):
+            if fm.horizontalAdvance(text[:i]) > avail:
+                split = i - 1
+                break
+        first, rest = text[:split], text[split:]
+        second = fm.elidedText(rest, Qt.TextElideMode.ElideRight, avail)
+        return first + "\n" + second
 
     def _is_in_name_area(self, pos):
         """Whether a point falls within the name label's row."""
