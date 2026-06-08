@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QDialog, QLineEdit, QSpinBox, QComboBox, QDialogButtonBox, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData
-from PyQt6.QtGui import QDrag, QFontMetrics
+from PyQt6.QtGui import QDrag, QFontMetrics, QFont
 from typing import List
 
 from src.models import Task, TaskStatus, Category
@@ -80,7 +80,17 @@ class TimerCard(QFrame):
         # Task name
         self.name_label = QLabel()
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.name_label.setWordWrap(True)
+        # wordWrap stays off: we build the (at most) two-line text ourselves in
+        # _elide_to_two_lines, and letting Qt re-wrap on top of that would push
+        # long names past the reserved height and overflow the card.
+        self.name_label.setWordWrap(False)
+        # Pin the label font so it matches what the stylesheet renders. Without
+        # this, QFontMetrics measures the smaller default widget font, the elide
+        # under-counts, and long names spill onto extra lines.
+        name_font = QFont()
+        name_font.setPixelSize(15)
+        name_font.setWeight(QFont.Weight.Medium)
+        self.name_label.setFont(name_font)
         # Reserve room for two lines so cards with short and long names keep
         # their buttons aligned at the same height.
         self.name_label.setFixedHeight(44)
@@ -302,7 +312,8 @@ class TimerCard(QFrame):
 
         if new_name and new_name != self.task.name:
             self.task.name = new_name
-            self.name_label.setText(new_name)
+            self.name_label.setText(self._elide_to_two_lines(new_name))
+            self.name_label.setToolTip(new_name)
             self.name_edited.emit(self.task.id, new_name)
 
     def eventFilter(self, obj, event):
