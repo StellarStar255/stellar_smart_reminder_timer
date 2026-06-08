@@ -4,12 +4,85 @@ from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QMenu,
     QDialog, QLineEdit, QSpinBox, QComboBox, QDialogButtonBox, QApplication
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData
-from PyQt6.QtGui import QDrag, QFontMetrics, QFont
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QPointF
+from PyQt6.QtGui import QDrag, QFont, QPainter, QColor
 from typing import List
 
 from src.models import Task, TaskStatus, Category
 from src.ui.components.circular_progress import CircularProgress
+
+
+class _ElidedLabel(QLabel):
+    """Center-aligned label that wraps text across at most two lines and appends
+    a single ellipsis to the last line when the full text doesn't fit.
+
+    Wrapping is computed from the widget's *real* width during painting, so the
+    front of the name stays continuous and text is never clipped mid-character
+    (the failure mode of guessing the available width up front)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._full_text = ""
+        self._text_color = QColor("#1d1d1f")
+        self._max_lines = 2
+
+    def setFullText(self, text: str):
+        self._full_text = text or ""
+        self.setToolTip(self._full_text)
+        self.update()
+
+    def fullText(self) -> str:
+        return self._full_text
+
+    def setTextColor(self, color):
+        self._text_color = QColor(color)
+        self.update()
+
+    def _wrap_lines(self, width: int) -> List[str]:
+        """Greedily pack the text into up to ``_max_lines`` lines that each fit
+        ``width``; the last line is elided with '…' if text remains."""
+        fm = self.fontMetrics()
+        lines: List[str] = []
+        remaining = self._full_text
+        for idx in range(self._max_lines):
+            if not remaining:
+                break
+            is_last = idx == self._max_lines - 1
+            # Largest prefix of ``remaining`` that fits the line width.
+            fit = 1
+            for j in range(1, len(remaining) + 1):
+                if fm.horizontalAdvance(remaining[:j]) <= width:
+                    fit = j
+                else:
+                    break
+            if fit >= len(remaining):
+                lines.append(remaining)
+                remaining = ""
+            elif is_last:
+                lines.append(fm.elidedText(remaining, Qt.TextElideMode.ElideRight, width))
+                remaining = ""
+            else:
+                lines.append(remaining[:fit])
+                remaining = remaining[fit:]
+        return lines
+
+    def paintEvent(self, event):
+        if not self._full_text:
+            return
+        painter = QPainter(self)
+        painter.setFont(self.font())
+        painter.setPen(self._text_color)
+        fm = self.fontMetrics()
+        width = self.width()
+        lines = self._wrap_lines(width)
+
+        line_height = fm.lineSpacing()
+        total_h = len(lines) * line_height
+        y = (self.height() - total_h) / 2 + fm.ascent()
+        for line in lines:
+            x = (width - fm.horizontalAdvance(line)) / 2
+            painter.drawText(QPointF(x, y), line)
+            y += line_height
 
 
 class TimerCard(QFrame):
@@ -77,16 +150,8 @@ class TimerCard(QFrame):
         self.progress.setToolTip("点击暂停/继续")
         layout.addWidget(self.progress, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        # Task name
-        self.name_label = QLabel()
-        self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # wordWrap stays off: we build the (at most) two-line text ourselves in
-        # _elide_to_two_lines, and letting Qt re-wrap on top of that would push
-        # long names past the reserved height and overflow the card.
-        self.name_label.setWordWrap(False)
-        # Pin the label font so it matches what the stylesheet renders. Without
-        # this, QFontMetrics measures the smaller default widget font, the elide
-        # under-counts, and long names spill onto extra lines.
+        # Task name (custom label: wraps to two lines, ellipsis only at the end)
+        self.name_label = _ElidedLabel()
         name_font = QFont()
         name_font.setPixelSize(15)
         name_font.setWeight(QFont.Weight.Medium)
@@ -94,14 +159,7 @@ class TimerCard(QFrame):
         # Reserve room for two lines so cards with short and long names keep
         # their buttons aligned at the same height.
         self.name_label.setFixedHeight(44)
-        self.name_label.setStyleSheet("""
-            QLabel {
-                font-size: 15px;
-                font-weight: 500;
-                color: #1d1d1f;
-                background: transparent;
-            }
-        """)
+        self.name_label.setStyleSheet("QLabel { background: transparent; }")
         layout.addWidget(self.name_label)
 
         # Inline name editor (hidden until the name is double-clicked)
@@ -163,10 +221,9 @@ class TimerCard(QFrame):
 
     def _update_display(self):
         """Update the display based on current task state."""
-        # Update name (clamped to two lines with an ellipsis so long names
-        # stay tidy; the full name is available as a tooltip).
-        self.name_label.setText(self._elide_to_two_lines(self.task.name))
-        self.name_label.setToolTip(self.task.name)
+        # Update name (the label clamps it to two lines with a trailing
+        # ellipsis; the full name is shown as a tooltip).
+        self.name_label.setFullText(self.task.name)
 
         # Update category
         if self.category:
@@ -261,30 +318,6 @@ class TimerCard(QFrame):
             return
         self.notebook_requested.emit(self.task.name)
 
-    def _elide_to_two_lines(self, text: str) -> str:
-        """Clamp ``text`` to at most two lines, appending an ellipsis if it
-        overflows. Keeps long task names from spilling past the card and
-        crowding the buttons."""
-        if not text:
-            return text
-        # Usable width inside the card: fixed width minus layout margins.
-        avail = self.width() - 32 if self.width() > 0 else 168
-        fm = QFontMetrics(self.name_label.font())
-
-        if fm.horizontalAdvance(text) <= avail:
-            return text  # fits on one line
-
-        # Greedily fill the first line, then put the rest on a second line
-        # that is elided if it still overflows.
-        split = len(text)
-        for i in range(1, len(text)):
-            if fm.horizontalAdvance(text[:i]) > avail:
-                split = i - 1
-                break
-        first, rest = text[:split], text[split:]
-        second = fm.elidedText(rest, Qt.TextElideMode.ElideRight, avail)
-        return first + "\n" + second
-
     def _is_in_name_area(self, pos):
         """Whether a point falls within the name label's row."""
         geo = self.name_label.geometry()
@@ -312,8 +345,7 @@ class TimerCard(QFrame):
 
         if new_name and new_name != self.task.name:
             self.task.name = new_name
-            self.name_label.setText(self._elide_to_two_lines(new_name))
-            self.name_label.setToolTip(new_name)
+            self.name_label.setFullText(new_name)
             self.name_edited.emit(self.task.id, new_name)
 
     def eventFilter(self, obj, event):
@@ -384,14 +416,7 @@ class TimerCard(QFrame):
                     border-color: #636366;
                 }
             """)
-            self.name_label.setStyleSheet("""
-                QLabel {
-                    font-size: 15px;
-                    font-weight: 500;
-                    color: #ffffff;
-                    background: transparent;
-                }
-            """)
+            self.name_label.setTextColor("#ffffff")
             self.category_label.setStyleSheet("""
                 QLabel {
                     font-size: 12px;
@@ -414,14 +439,7 @@ class TimerCard(QFrame):
                     border-color: #d2d2d7;
                 }
             """)
-            self.name_label.setStyleSheet("""
-                QLabel {
-                    font-size: 15px;
-                    font-weight: 500;
-                    color: #1d1d1f;
-                    background: transparent;
-                }
-            """)
+            self.name_label.setTextColor("#1d1d1f")
             self.category_label.setStyleSheet("""
                 QLabel {
                     font-size: 12px;
