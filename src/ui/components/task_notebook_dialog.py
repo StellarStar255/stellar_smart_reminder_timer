@@ -216,6 +216,65 @@ class _NotebookTextEdit(QTextEdit):
         except Exception:
             return base
 
+    def keyPressEvent(self, event):
+        # Cmd+C with an image in the selection: write the macOS pasteboard
+        # natively so apps that only accept public.png (e.g. 飞书) get the
+        # image, bypassing Qt's lazy pasteboard conversion entirely.
+        if event.matches(QKeySequence.StandardKey.Copy):
+            try:
+                if self._copy_selection_with_image():
+                    event.accept()
+                    return
+            except Exception:
+                pass
+        super().keyPressEvent(event)
+
+    def _copy_selection_with_image(self) -> bool:
+        """Copy the current selection with native image flavors.
+        Returns True when handled (selection contained an image)."""
+        image = self._first_image_in_selection()
+        if image is None or image.isNull():
+            return False
+        base = QTextEdit.createMimeDataFromSelection(self)
+        self.copy_image_to_clipboard(image, html=base.html(), text=base.text())
+        return True
+
+    def copy_image_to_clipboard(self, image: QImage, html: str = None, text: str = None):
+        """Put an image on the clipboard, preferring a direct NSPasteboard
+        write (standard public.png flavor) over Qt's clipboard."""
+        png = self._encode_png(image)
+        if png and self._write_pasteboard_native(png, html=html, text=text):
+            return
+        from PyQt6.QtGui import QGuiApplication
+        mime = self._image_mime_data(image, html=html, text=text)
+        if mime is not None:
+            QGuiApplication.clipboard().setMimeData(mime)
+
+    @staticmethod
+    def _write_pasteboard_native(png_bytes: bytes, html: str = None,
+                                 text: str = None) -> bool:
+        """Write PNG (+ optional html/text) straight to the macOS pasteboard."""
+        try:
+            from AppKit import NSPasteboard
+            from Foundation import NSData
+            pb = NSPasteboard.generalPasteboard()
+            pb.clearContents()
+            types = ["public.png"]
+            if html:
+                types.append("public.html")
+            if text:
+                types.append("public.utf8-plain-text")
+            pb.declareTypes_owner_(types, None)
+            ns_data = NSData.dataWithBytes_length_(png_bytes, len(png_bytes))
+            ok = pb.setData_forType_(ns_data, "public.png")
+            if html:
+                pb.setString_forType_(html, "public.html")
+            if text:
+                pb.setString_forType_(text, "public.utf8-plain-text")
+            return bool(ok)
+        except Exception:
+            return False
+
     def _image_mime_data(self, image: QImage, html: str = None, text: str = None):
         """Build clipboard data for an image with pre-encoded PNG bytes.
 
@@ -571,10 +630,7 @@ class TaskNotebookDialog(QDialog):
         elif open_link_action is not None and action == open_link_action:
             QDesktopServices.openUrl(QUrl(url))
         elif copy_image_action is not None and action == copy_image_action:
-            from PyQt6.QtGui import QGuiApplication
-            mime = self._editor._image_mime_data(image_under_cursor)
-            if mime is not None:
-                QGuiApplication.clipboard().setMimeData(mime)
+            self._editor.copy_image_to_clipboard(image_under_cursor)
 
     def closeEvent(self, event):
         """Auto-save content on close (as HTML to preserve formatting)."""
