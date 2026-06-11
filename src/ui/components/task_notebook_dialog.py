@@ -211,14 +211,28 @@ class _NotebookTextEdit(QTextEdit):
             image = self._first_image_in_selection()
             if image is None or image.isNull():
                 return base
-            from PyQt6.QtCore import QMimeData
-            mime = QMimeData()
-            mime.setHtml(base.html())
-            mime.setText(base.text())
-            mime.setImageData(image)
-            return mime
+            mime = self._image_mime_data(image, html=base.html(), text=base.text())
+            return mime if mime is not None else base
         except Exception:
             return base
+
+    def _image_mime_data(self, image: QImage, html: str = None, text: str = None):
+        """Build clipboard data for an image with pre-encoded PNG bytes.
+
+        setImageData alone defers encoding to Qt's image writer when the
+        target app requests the data — which is broken under anaconda's Qt.
+        Providing ready-made 'image/png' bytes avoids that lazy encode."""
+        from PyQt6.QtCore import QMimeData, QByteArray
+        mime = QMimeData()
+        png = self._encode_png(image)
+        if png:
+            mime.setData('image/png', QByteArray(png))
+        mime.setImageData(image)
+        if html:
+            mime.setHtml(html)
+        if text:
+            mime.setText(text)
+        return mime
 
     def _first_image_in_selection(self):
         cursor = self.textCursor()
@@ -558,7 +572,9 @@ class TaskNotebookDialog(QDialog):
             QDesktopServices.openUrl(QUrl(url))
         elif copy_image_action is not None and action == copy_image_action:
             from PyQt6.QtGui import QGuiApplication
-            QGuiApplication.clipboard().setImage(image_under_cursor)
+            mime = self._editor._image_mime_data(image_under_cursor)
+            if mime is not None:
+                QGuiApplication.clipboard().setMimeData(mime)
 
     def closeEvent(self, event):
         """Auto-save content on close (as HTML to preserve formatting)."""
