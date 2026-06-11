@@ -524,7 +524,7 @@ class EditPresetDialog(QDialog):
         # Duration
         duration_label = QLabel("时长（分钟）")
         self.duration_input = QSpinBox()
-        self.duration_input.setRange(1, 480)
+        self.duration_input.setRange(1, 43200)  # 1 min to 1 month, same as custom dialog
         self.duration_input.setValue(self.preset.duration_seconds // 60)
         self.duration_input.setSuffix("")
         layout.addWidget(duration_label)

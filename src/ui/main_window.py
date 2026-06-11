@@ -20,6 +20,7 @@ from src.core.notification_service import NotificationService, InAppNotification
 from src.models import Task, TaskStatus, Category, Preset
 from src.ui.components.timer_card import TimerCard, EditTimerDialog
 from src.ui.components.preset_bar import PresetBar, CustomTimerDialog, EditPresetDialog
+from src.ui.components.preset_manager_dialog import PresetManagerDialog
 from src.ui.components.category_sidebar import CategorySidebar
 from src.ui.components.stats_dashboard import StatsDashboard
 from src.ui.components.task_notebook_dialog import TaskNotebookDialog
@@ -174,6 +175,27 @@ class MainWindow(QMainWindow):
             }
         """)
         header_layout.addWidget(self.preset_search_input)
+
+        # Preset management button (opens list-style manager dialog)
+        self.manage_btn = QPushButton("🗂 管理预设")
+        self.manage_btn.setFixedHeight(32)
+        self.manage_btn.setToolTip("以列表方式整理、修改和管理所有预设")
+        self.manage_btn.clicked.connect(self._on_manage_presets)
+        self.manage_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f5f5f7;
+                color: #1d1d1f;
+                border: 1px solid #d2d2d7;
+                border-radius: 8px;
+                font-size: 13px;
+                padding: 0 12px;
+            }
+            QPushButton:hover {
+                background-color: #e5e5ea;
+                color: #1d1d1f;
+            }
+        """)
+        header_layout.addWidget(self.manage_btn)
 
         header_layout.addStretch()
 
@@ -500,6 +522,17 @@ class MainWindow(QMainWindow):
                     )
                 self._refresh_presets()
 
+    def _on_manage_presets(self):
+        """Open the list-style preset manager dialog."""
+        categories = list(self._categories.values())
+        dialog = PresetManagerDialog(
+            self.preset_manager, categories, self, dark_mode=self._dark_mode
+        )
+        # Keep the preset bar in sync while the dialog stays open
+        dialog.presets_changed.connect(self._refresh_presets_filtered)
+        dialog.exec()
+        self._refresh_presets_filtered()
+
     def _on_preset_deleted(self, preset_id: int):
         """Handle custom preset deletion."""
         self.preset_manager.delete(preset_id)
@@ -780,6 +813,38 @@ class MainWindow(QMainWindow):
                     border: 1px solid #d2d2d7;
                     border-radius: 8px;
                     font-size: 14px;
+                    padding: 0 12px;
+                }
+                QPushButton:hover {
+                    background-color: #e5e5ea;
+                    color: #1d1d1f;
+                }
+            """)
+
+        # Manage-presets button follows the same look as the other header buttons
+        if self._dark_mode:
+            self.manage_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2c2c2e;
+                    color: #ffffff;
+                    border: 1px solid #48484a;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    padding: 0 12px;
+                }
+                QPushButton:hover {
+                    background-color: #3a3a3c;
+                    color: #ffffff;
+                }
+            """)
+        else:
+            self.manage_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f5f5f7;
+                    color: #1d1d1f;
+                    border: 1px solid #d2d2d7;
+                    border-radius: 8px;
+                    font-size: 13px;
                     padding: 0 12px;
                 }
                 QPushButton:hover {
