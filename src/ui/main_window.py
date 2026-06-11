@@ -180,6 +180,19 @@ class MainWindow(QMainWindow):
                 padding-left: 8px;
             }
         """)
+        # Fix the label width to the widest possible clock string, otherwise
+        # the per-second updates resize it and shove the widgets next to it.
+        from PyQt6.QtGui import QFontMetrics
+        clock_font = QFont(self._clock_label.font())
+        clock_font.setPixelSize(15)
+        metrics = QFontMetrics(clock_font)
+        widest_digit = max("0123456789", key=metrics.horizontalAdvance)
+        sample = f"00月00日 周四 00:00:00".replace("0", widest_digit)
+        self._clock_label.setFixedWidth(metrics.horizontalAdvance(sample) + 16)
+        self._clock_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
         header_layout.addWidget(self._clock_label)
         self._update_clock()
 
