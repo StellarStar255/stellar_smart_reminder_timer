@@ -6,6 +6,14 @@ A better task timer and reminder app for macOS.
 
 import sys
 import os
+import faulthandler
+
+# Write native-crash stack traces to a log so segfaults are diagnosable.
+_CRASH_LOG_PATH = os.path.expanduser("~/.stellarpulse/crash.log")
+os.makedirs(os.path.dirname(_CRASH_LOG_PATH), exist_ok=True)
+_crash_log_file = open(_CRASH_LOG_PATH, "a")
+faulthandler.enable(_crash_log_file)
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt, QEvent, QObject
 from PyQt6.QtGui import QFont, QIcon
