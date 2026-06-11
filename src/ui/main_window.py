@@ -377,17 +377,23 @@ class MainWindow(QMainWindow):
         self._status_bar = NSStatusBar.systemStatusBar()
         self._status_item = self._status_bar.statusItemWithLength_(NSVariableStatusItemLength)
 
-        # Create 22x22 clock icon
-        pixmap = QPixmap(22, 22)
+        # Create a clock icon as outline strokes. macOS template images only
+        # use the alpha channel, so a filled face would render as a solid
+        # blob — keep the face transparent and draw ring + hands as strokes.
+        # Rendered at 44x44 (2x) for Retina sharpness, displayed at 22x22.
+        from PyQt6.QtGui import QPen
+        pixmap = QPixmap(44, 44)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QBrush(QColor(0, 0, 0, 255)))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(3, 3, 16, 16)
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawLine(11, 11, 11, 6)
-        painter.drawLine(11, 11, 15, 11)
+        pen = QPen(QColor(0, 0, 0))
+        pen.setWidthF(3.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(4, 4, 36, 36)   # clock ring
+        painter.drawLine(22, 22, 22, 11)    # minute hand (12 o'clock)
+        painter.drawLine(22, 22, 30, 26)    # hour hand (~4 o'clock)
         painter.end()
 
         # Convert QPixmap to NSImage
@@ -396,8 +402,10 @@ class MainWindow(QMainWindow):
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
         pixmap.save(buffer, "PNG")
         buffer.close()
+        from Foundation import NSMakeSize
         ns_data = NSData.dataWithBytes_length_(bytes(byte_array), len(byte_array))
         ns_image = NSImage.alloc().initWithData_(ns_data)
+        ns_image.setSize_(NSMakeSize(22, 22))  # 44px bitmap at 22pt = Retina 2x
         ns_image.setTemplate_(True)  # Adapts to light/dark menu bar
         self._status_item.button().setImage_(ns_image)
 
