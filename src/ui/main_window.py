@@ -252,18 +252,25 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.save_config_btn)
 
         # Import/export menu button (file-based config transfer).
-        # The menu is shown via exec() on click instead of setMenu():
-        # press-popup menus flicker on macOS with styled (rounded) QMenus.
+        # Shown manually on press (not via setMenu) so it pops immediately;
+        # WA_TranslucentBackground lets the rounded QSS corners render in a
+        # single pass instead of square-window-then-mask, which flickers.
         self.transfer_btn = QPushButton("📤 导入导出")
         self.transfer_btn.setFixedHeight(32)
         self.transfer_btn.setToolTip("把预设和设置导出为文件，或从文件导入")
         self._transfer_menu = QMenu(self)
+        self._transfer_menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         export_action = self._transfer_menu.addAction("导出配置到文件…")
         export_action.triggered.connect(self._on_export_config)
         import_action = self._transfer_menu.addAction("从文件导入配置…")
         import_action.triggered.connect(self._on_import_config)
-        self.transfer_btn.clicked.connect(self._show_transfer_menu)
+        self._transfer_menu_hidden_at = 0.0
+        self._transfer_menu.aboutToHide.connect(self._on_transfer_menu_hidden)
+        self.transfer_btn.pressed.connect(self._show_transfer_menu)
         self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
+        # Pre-polish so the first open doesn't pay style computation cost
+        self._transfer_menu.ensurePolished()
+        self._transfer_menu.sizeHint()
         header_layout.addWidget(self.transfer_btn)
 
         header_layout.addStretch()
@@ -1025,11 +1032,20 @@ class MainWindow(QMainWindow):
         self.db.set_setting("dark_mode", "1" if self._dark_mode else "0")
         self._apply_theme()
 
+    def _on_transfer_menu_hidden(self):
+        import time
+        self._transfer_menu_hidden_at = time.monotonic()
+
     def _show_transfer_menu(self):
-        """Pop the import/export menu just below its button."""
+        """Pop the import/export menu just below its button (on press)."""
+        import time
         from PyQt6.QtCore import QPoint
+        # The press that dismisses an open menu also lands on the button;
+        # ignore it so the menu doesn't instantly reopen (visible as flicker).
+        if time.monotonic() - self._transfer_menu_hidden_at < 0.2:
+            return
         pos = self.transfer_btn.mapToGlobal(QPoint(0, self.transfer_btn.height() + 4))
-        self._transfer_menu.exec(pos)
+        self._transfer_menu.popup(pos)
 
     def _style_main_scroll(self):
         """Style the scroll areas; the card row gets a visible horizontal bar."""
