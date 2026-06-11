@@ -4,11 +4,11 @@ import re
 from datetime import datetime
 
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QLabel
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QUrl, QByteArray, QBuffer, QIODevice
 from PyQt6.QtGui import (
     QKeySequence, QShortcut, QDesktopServices,
     QTextCursor, QTextCharFormat, QColor, QFont, QSyntaxHighlighter,
-    QPixmap, QIcon, QPainter,
+    QPixmap, QIcon, QPainter, QImage,
 )
 
 from src.data.database import Database
@@ -117,6 +117,55 @@ class _NotebookTextEdit(QTextEdit):
             self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
             self._current_cursor_shape = Qt.CursorShape.IBeamCursor
         super().leaveEvent(event)
+
+    # ----- Image paste / drop -------------------------------------------
+
+    # Pasted images wider than this are scaled down to keep the stored
+    # notebook HTML (base64-embedded) reasonably small.
+    MAX_IMAGE_WIDTH = 800
+
+    IMAGE_FILE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.tiff')
+
+    def canInsertFromMimeData(self, source) -> bool:
+        if source.hasImage():
+            return True
+        return super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source):
+        """Embed pasted/dropped images as base64 data URIs so they survive
+        toHtml() round-trips (database save, export/import)."""
+        if source.hasImage():
+            image = QImage(source.imageData())
+            if not image.isNull():
+                self._insert_image(image)
+                return
+        if source.hasUrls():
+            inserted = False
+            for url in source.urls():
+                if (url.isLocalFile()
+                        and url.toLocalFile().lower().endswith(self.IMAGE_FILE_SUFFIXES)):
+                    image = QImage(url.toLocalFile())
+                    if not image.isNull():
+                        self._insert_image(image)
+                        inserted = True
+            if inserted:
+                return
+        super().insertFromMimeData(source)
+
+    def _insert_image(self, image: QImage):
+        if image.width() > self.MAX_IMAGE_WIDTH:
+            image = image.scaledToWidth(
+                self.MAX_IMAGE_WIDTH, Qt.TransformationMode.SmoothTransformation
+            )
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buf, "PNG")
+        buf.close()
+        b64 = bytes(ba.toBase64()).decode('ascii')
+        self.textCursor().insertHtml(
+            f'<img src="data:image/png;base64,{b64}" width="{image.width()}" />'
+        )
 
     # ----- Rich-text formatting ----------------------------------------
 
@@ -237,7 +286,8 @@ class TaskNotebookDialog(QDialog):
         self._editor.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._editor.customContextMenuRequested.connect(self._show_editor_context_menu)
         self._editor.setPlaceholderText(
-            "在此输入笔记...(选中文字后右键可设置格式;按住 Option/Alt 点击链接以打开)"
+            "在此输入笔记...(选中文字后右键可设置格式;按住 Option/Alt 点击链接以打开;"
+            "支持直接粘贴图片)"
         )
         layout.addWidget(self._editor, 1)
 
