@@ -251,6 +251,19 @@ class MainWindow(QMainWindow):
         self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
         header_layout.addWidget(self.save_config_btn)
 
+        # Import/export menu button (file-based config transfer)
+        self.transfer_btn = QPushButton("⇅ 导入导出")
+        self.transfer_btn.setFixedHeight(32)
+        self.transfer_btn.setToolTip("把预设和设置导出为文件，或从文件导入")
+        transfer_menu = QMenu(self)
+        export_action = transfer_menu.addAction("导出配置到文件…")
+        export_action.triggered.connect(self._on_export_config)
+        import_action = transfer_menu.addAction("从文件导入配置…")
+        import_action.triggered.connect(self._on_import_config)
+        self.transfer_btn.setMenu(transfer_menu)
+        self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
+        header_layout.addWidget(self.transfer_btn)
+
         header_layout.addStretch()
 
         # Alarm mode toggle button
@@ -587,12 +600,8 @@ class MainWindow(QMainWindow):
                     )
                 self._refresh_presets()
 
-    def _on_save_config(self):
-        """Silently save all settings and write a JSON backup to the app dir."""
-        import json
-        from pathlib import Path
-
-        # Flush current UI preferences so everything on screen is persisted
+    def _collect_config_data(self) -> dict:
+        """Flush on-screen preferences and assemble the full config snapshot."""
         self.db.set_setting("dark_mode", "1" if self._dark_mode else "0")
         alarm = ("three_times"
                  if self.notification_service.alarm_mode == NotificationService.ALARM_THREE_TIMES
@@ -606,7 +615,7 @@ class MainWindow(QMainWindow):
         cursor = self.db.execute("SELECT key, value FROM app_settings")
         settings = {row['key']: row['value'] for row in cursor.fetchall()}
 
-        data = {
+        return {
             'app': 'stellarpulse',
             'version': 1,
             'exported_at': datetime.now().isoformat(),
@@ -615,6 +624,12 @@ class MainWindow(QMainWindow):
             'settings': settings,
         }
 
+    def _on_save_config(self):
+        """Silently save all settings and write a JSON backup to the app dir."""
+        import json
+        from pathlib import Path
+
+        data = self._collect_config_data()
         try:
             backup_path = Path.home() / ".stellarpulse" / "config_backup.json"
             backup_path.parent.mkdir(exist_ok=True)
@@ -632,6 +647,154 @@ class MainWindow(QMainWindow):
     def _reset_save_config_btn(self):
         self.save_config_btn.setText("💾 保存配置")
         self.save_config_btn.setEnabled(True)
+
+    def _on_export_config(self):
+        """Export presets, categories and settings to a user-chosen file."""
+        import json
+        from pathlib import Path
+        from PyQt6.QtWidgets import QFileDialog
+
+        default_dir = Path.home() / "Documents"
+        if not default_dir.exists():
+            default_dir = Path.home()
+        default_name = f"stellarpulse_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出配置", str(default_dir / default_name), "JSON 文件 (*.json)"
+        )
+        if not path:
+            return
+
+        data = self._collect_config_data()
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            QMessageBox.warning(self, "导出配置", f"导出失败：{e}")
+            return
+
+        QMessageBox.information(
+            self, "导出配置",
+            f"已导出 {len(data['presets'])} 个预设、{len(data['categories'])} 个分类和全部设置到：\n{path}"
+        )
+
+    def _on_import_config(self):
+        """Import presets, categories and settings from an exported file.
+
+        Merge semantics: nothing local is deleted. Categories match by name,
+        presets dedup by name+duration; settings are overwritten.
+        """
+        import json
+        from pathlib import Path
+        from PyQt6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入配置", str(Path.home()), "JSON 文件 (*.json)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            QMessageBox.warning(self, "导入配置", f"无法读取配置文件：{e}")
+            return
+        if not isinstance(data, dict) or data.get('app') != 'stellarpulse':
+            QMessageBox.warning(self, "导入配置", "这不是星际脉动导出的配置文件。")
+            return
+
+        # Merge categories by name; map exported ids to local ids
+        local_cats = {c.name: c for c in self.category_repo.get_all()}
+        id_map = {}
+        new_cats = 0
+        for cat_data in data.get('categories', []):
+            name = cat_data.get('name')
+            if not name:
+                continue
+            if name in local_cats:
+                id_map[cat_data.get('id')] = local_cats[name].id
+            else:
+                cat = Category.from_dict({**cat_data, 'id': None, 'is_default': False})
+                created = self.category_repo.create(cat)
+                local_cats[name] = created
+                id_map[cat_data.get('id')] = created.id
+                new_cats += 1
+
+        # Merge presets (dedup by name + duration)
+        fallback_cat_id = next(iter(id_map.values()), None) or next(iter(self._categories), 1)
+        added = updated = 0
+        for p in data.get('presets', []):
+            name = p.get('name')
+            duration = p.get('duration_seconds')
+            if not name or not isinstance(duration, int) or duration <= 0:
+                continue
+            cat_id = id_map.get(p.get('category_id'), fallback_cat_id)
+            existing = self.preset_repo.find_by_name_and_duration(name, duration)
+            if existing:
+                changed = False
+                if (p.get('star_rating') or 0) > (existing.star_rating or 0):
+                    existing.star_rating = p['star_rating']
+                    changed = True
+                if p.get('category_id') in id_map and existing.category_id != cat_id:
+                    existing.category_id = cat_id
+                    changed = True
+                if changed:
+                    self.preset_repo.update(existing)
+                    updated += 1
+            else:
+                self.preset_repo.create(Preset(
+                    name=name,
+                    duration_seconds=duration,
+                    category_id=cat_id,
+                    is_default=False,
+                    sort_order=p.get('sort_order', 0) or 0,
+                    use_count=p.get('use_count', 0) or 0,
+                    star_rating=p.get('star_rating', 0) or 0,
+                ))
+                added += 1
+
+        # Overwrite settings and re-apply them to the UI
+        settings = data.get('settings', {})
+        for key, value in settings.items():
+            self.db.set_setting(str(key), str(value))
+        self._apply_imported_settings(settings)
+
+        # Refresh caches and views
+        self._categories.clear()
+        categories = self.category_repo.get_all()
+        for cat in categories:
+            self._categories[cat.id] = cat
+        self.sidebar.set_categories(categories)
+        self._refresh_presets()
+        self._update_stats()
+
+        QMessageBox.information(
+            self, "导入配置",
+            f"导入完成：新增 {added} 个预设、更新 {updated} 个预设、新增 {new_cats} 个分类，"
+            f"并应用了 {len(settings)} 项设置。"
+        )
+
+    def _apply_imported_settings(self, settings: dict):
+        """Re-apply imported preference values to the live UI."""
+        if 'dark_mode' in settings:
+            self._dark_mode = str(settings.get('dark_mode')) == '1'
+            self._apply_theme()
+        alarm = settings.get('alarm_mode')
+        if alarm == 'three_times':
+            self.notification_service.alarm_mode = NotificationService.ALARM_THREE_TIMES
+            self.alarm_btn.setText("🔔 响三下")
+        elif alarm == 'continuous':
+            self.notification_service.alarm_mode = NotificationService.ALARM_CONTINUOUS
+            self.alarm_btn.setText("🔔 一直响")
+        days = str(settings.get('task_dist_days', ''))
+        if days.isdigit():
+            self.stats_dashboard.set_period(int(days))
+        mode = settings.get('chart_mode')
+        if mode in ('bar', 'pie'):
+            self.stats_dashboard.set_chart_mode(mode)
+        # Chart star ratings / hidden tasks were written to settings above
+        self.stats_dashboard._load_star_ratings()
+        self.stats_dashboard._load_hidden_tasks()
 
     def _on_manage_presets(self):
         """Open the list-style preset manager dialog."""
@@ -1013,6 +1176,7 @@ class MainWindow(QMainWindow):
             """)
 
         self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
+        self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
 
         # Update components
         self.sidebar.set_dark_mode(self._dark_mode)
