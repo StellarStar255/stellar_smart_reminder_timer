@@ -47,6 +47,39 @@ def _create_objc_delegate_class():
 _TrayMenuDelegate = _create_objc_delegate_class()
 
 
+class _CardsScrollArea(QScrollArea):
+    """Horizontal-only scroll area whose height always fits its content,
+    so only the timer-card row scrolls sideways while everything below it
+    stays pinned to the window width."""
+
+    _SCROLLBAR_ALLOWANCE = 14  # styled bar height (10px) + margins
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+    def setWidget(self, widget):
+        super().setWidget(widget)
+        widget.installEventFilter(self)
+        self._sync_height()
+
+    def eventFilter(self, obj, event):
+        # Track content size changes so the row never collapses or clips.
+        if obj is self.widget() and event.type() in (
+            QEvent.Type.Resize, QEvent.Type.LayoutRequest
+        ):
+            self._sync_height()
+        return super().eventFilter(obj, event)
+
+    def _sync_height(self):
+        widget = self.widget()
+        height = widget.sizeHint().height() if widget else 0
+        self.setFixedHeight(height + self._SCROLLBAR_ALLOWANCE)
+
+
 class MainWindow(QMainWindow):
     """Main application window."""
 
@@ -247,14 +280,13 @@ class MainWindow(QMainWindow):
         self.preset_bar = PresetBar()
         content_layout.addWidget(self.preset_bar)
 
-        # Main scrollable content area (timer cards at top, stats below)
+        # Main scrollable content area (timer cards at top, stats below);
+        # scrolls vertically only — horizontal overflow is handled by the
+        # dedicated timer-card scroll area so the stats stay fully visible.
         main_scroll = QScrollArea()
         self._main_scroll = main_scroll
         main_scroll.setWidgetResizable(True)
-        # Show a horizontal scroll bar when timer cards overflow, so it's
-        # obvious there is more content to the left/right.
-        main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._style_main_scroll()
+        main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
@@ -289,7 +321,11 @@ class MainWindow(QMainWindow):
         self.timer_layout.addWidget(self.empty_label)
         self.timer_layout.addStretch()
 
-        scroll_layout.addWidget(self.timer_container)
+        # Only the timer-card row scrolls horizontally, with a visible
+        # scroll bar hinting at off-screen cards.
+        self.cards_scroll = _CardsScrollArea()
+        self.cards_scroll.setWidget(self.timer_container)
+        scroll_layout.addWidget(self.cards_scroll)
 
         # Stats dashboard (below timer cards, scrollable)
         self.stats_dashboard = StatsDashboard(db=self.db)
@@ -442,6 +478,7 @@ class MainWindow(QMainWindow):
 
         # Hide empty label
         self.empty_label.hide()
+        self.cards_scroll.updateGeometry()
 
     def _remove_timer_card(self, task_id: int):
         """Remove a timer card."""
@@ -453,6 +490,7 @@ class MainWindow(QMainWindow):
         # Show empty label if no cards
         if not self._timer_cards:
             self.empty_label.show()
+        self.cards_scroll.updateGeometry()
 
     def _update_stats(self):
         """Update statistics display."""
@@ -742,14 +780,20 @@ class MainWindow(QMainWindow):
         self._apply_theme()
 
     def _style_main_scroll(self):
-        """Style the main scroll area with an always-visible horizontal bar."""
+        """Style the scroll areas; the card row gets a visible horizontal bar."""
         if self._dark_mode:
             handle = "#5a5a5e"
             handle_hover = "#6e6e73"
         else:
             handle = "#c0c0c0"
             handle_hover = "#a0a0a5"
-        self._main_scroll.setStyleSheet(f"""
+        self._main_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+        """)
+        self.cards_scroll.setStyleSheet(f"""
             QScrollArea {{
                 border: none;
                 background-color: transparent;
