@@ -954,6 +954,7 @@ class StatsDashboard(QWidget):
 
     SETTINGS_KEY = "hidden_chart_tasks"
     STAR_RATINGS_KEY = "task_star_ratings"
+    CHART_MODE_KEY = "chart_mode"
 
     def __init__(self, db: Optional[Database] = None, parent=None):
         super().__init__(parent)
@@ -967,6 +968,7 @@ class StatsDashboard(QWidget):
         self._setup_ui()
         self._load_hidden_tasks()
         self._load_star_ratings()
+        self._load_chart_mode()
 
     def _setup_ui(self):
         """Set up the dashboard UI."""
@@ -1202,15 +1204,30 @@ class StatsDashboard(QWidget):
 
     def _on_chart_toggle(self):
         """Toggle between bar chart and pie chart."""
-        if self._chart_mode == "bar":
-            self._chart_mode = "pie"
+        self.set_chart_mode("pie" if self._chart_mode == "bar" else "bar")
+
+    def set_chart_mode(self, mode: str):
+        """Switch to the given chart mode ('bar' or 'pie') and persist it."""
+        if mode not in ("bar", "pie"):
+            return
+        self._chart_mode = mode
+        if mode == "pie":
             self._chart_toggle_btn.setText("柱状")
             self._chart_stack.setCurrentIndex(1)
         else:
-            self._chart_mode = "bar"
             self._chart_toggle_btn.setText("占比")
             self._chart_stack.setCurrentIndex(0)
         self._apply_chart_toggle_style()
+        if self._db:
+            self._db.set_setting(self.CHART_MODE_KEY, mode)
+
+    def _load_chart_mode(self):
+        """Restore the chart mode saved from a previous session."""
+        if not self._db:
+            return
+        mode = self._db.get_setting(self.CHART_MODE_KEY, "bar")
+        if mode in ("bar", "pie") and mode != self._chart_mode:
+            self.set_chart_mode(mode)
 
     def _apply_chart_toggle_style(self):
         """Apply style to the chart type toggle button."""

@@ -579,6 +579,17 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
+        # Flush current UI preferences so the export reflects what's on screen
+        self.db.set_setting("dark_mode", "1" if self._dark_mode else "0")
+        alarm = ("three_times"
+                 if self.notification_service.alarm_mode == NotificationService.ALARM_THREE_TIMES
+                 else "continuous")
+        self.db.set_setting("alarm_mode", alarm)
+        self.db.set_setting("task_dist_days", str(self._task_dist_days))
+        self.db.set_setting(
+            StatsDashboard.CHART_MODE_KEY, self.stats_dashboard._chart_mode
+        )
+
         cursor = self.db.execute("SELECT key, value FROM app_settings")
         settings = {row['key']: row['value'] for row in cursor.fetchall()}
 
