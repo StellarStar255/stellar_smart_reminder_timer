@@ -252,7 +252,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.save_config_btn)
 
         # Import/export menu button (file-based config transfer)
-        self.transfer_btn = QPushButton("⇅ 导入导出")
+        self.transfer_btn = QPushButton("📤 导入导出")
         self.transfer_btn.setFixedHeight(32)
         self.transfer_btn.setToolTip("把预设和设置导出为文件，或从文件导入")
         transfer_menu = QMenu(self)
@@ -261,7 +261,7 @@ class MainWindow(QMainWindow):
         import_action = transfer_menu.addAction("从文件导入配置…")
         import_action.triggered.connect(self._on_import_config)
         self.transfer_btn.setMenu(transfer_menu)
-        self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
+        self._style_transfer_btn()
         header_layout.addWidget(self.transfer_btn)
 
         header_layout.addStretch()
@@ -1023,6 +1023,16 @@ class MainWindow(QMainWindow):
         self.db.set_setting("dark_mode", "1" if self._dark_mode else "0")
         self._apply_theme()
 
+    def _style_transfer_btn(self):
+        """Match the other header buttons but hide the default menu arrow,
+        which otherwise renders squeezed into the button corner."""
+        self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet() + """
+            QPushButton::menu-indicator {
+                image: none;
+                width: 0px;
+            }
+        """)
+
     def _style_main_scroll(self):
         """Style the scroll areas; the card row gets a visible horizontal bar."""
         if self._dark_mode:
@@ -1176,7 +1186,7 @@ class MainWindow(QMainWindow):
             """)
 
         self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
-        self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
+        self._style_transfer_btn()
 
         # Update components
         self.sidebar.set_dark_mode(self._dark_mode)
