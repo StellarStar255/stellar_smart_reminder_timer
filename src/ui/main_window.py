@@ -230,6 +230,14 @@ class MainWindow(QMainWindow):
         """)
         header_layout.addWidget(self.manage_btn)
 
+        # Save-config button (exports presets/categories/settings to JSON)
+        self.save_config_btn = QPushButton("💾 保存配置")
+        self.save_config_btn.setFixedHeight(32)
+        self.save_config_btn.setToolTip("把所有预设、分类和设置导出为 JSON 备份文件")
+        self.save_config_btn.clicked.connect(self._on_save_config)
+        self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
+        header_layout.addWidget(self.save_config_btn)
+
         header_layout.addStretch()
 
         # Alarm mode toggle button
@@ -557,6 +565,43 @@ class MainWindow(QMainWindow):
                         category_id=result['category_id'],
                     )
                 self._refresh_presets()
+
+    def _on_save_config(self):
+        """Export presets, categories and app settings to a JSON backup file."""
+        import json
+        from pathlib import Path
+        from PyQt6.QtWidgets import QFileDialog
+
+        default_name = f"stellarpulse_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存配置", str(Path.home() / default_name), "JSON 文件 (*.json)"
+        )
+        if not path:
+            return
+
+        cursor = self.db.execute("SELECT key, value FROM app_settings")
+        settings = {row['key']: row['value'] for row in cursor.fetchall()}
+
+        data = {
+            'app': 'stellarpulse',
+            'version': 1,
+            'exported_at': datetime.now().isoformat(),
+            'categories': [c.to_dict() for c in self.category_repo.get_all()],
+            'presets': [p.to_dict() for p in self.preset_repo.get_all()],
+            'settings': settings,
+        }
+
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            QMessageBox.warning(self, "保存配置", f"保存失败：{e}")
+            return
+
+        QMessageBox.information(
+            self, "保存配置",
+            f"已导出 {len(data['presets'])} 个预设、{len(data['categories'])} 个分类和应用设置到：\n{path}"
+        )
 
     def _on_manage_presets(self):
         """Open the list-style preset manager dialog."""
@@ -930,6 +975,8 @@ class MainWindow(QMainWindow):
                     color: #1d1d1f;
                 }
             """)
+
+        self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
 
         # Update components
         self.sidebar.set_dark_mode(self._dark_mode)
