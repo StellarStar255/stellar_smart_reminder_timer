@@ -178,12 +178,15 @@ class TimerCard(QFrame):
 
         self.toggle_btn = QPushButton("开始")
         self.toggle_btn.setMinimumWidth(70)
+        self.toggle_btn.setFixedHeight(34)
         self.toggle_btn.clicked.connect(self._on_toggle)
+        # Transparent border keeps the box model identical to the stop
+        # button (which has a real 1px border), so both render the same size.
         self.toggle_btn.setStyleSheet("""
             QPushButton {
                 background-color: #007AFF;
                 color: white;
-                border: none;
+                border: 1px solid transparent;
                 padding: 8px 16px;
                 border-radius: 6px;
                 font-size: 13px;
@@ -195,6 +198,7 @@ class TimerCard(QFrame):
 
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setMinimumWidth(70)
+        self.stop_btn.setFixedHeight(34)
         self.stop_btn.clicked.connect(self._on_stop)
         self.stop_btn.setStyleSheet("""
             QPushButton {
