@@ -1,10 +1,12 @@
 """Per-task notebook dialog for taking notes."""
 
 import re
+import struct
+import zlib
 from datetime import datetime
 
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QLabel
-from PyQt6.QtCore import Qt, QUrl, QByteArray, QBuffer, QIODevice
+from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import (
     QKeySequence, QShortcut, QDesktopServices,
     QTextCursor, QTextCharFormat, QColor, QFont, QSyntaxHighlighter,
@@ -186,17 +188,46 @@ class _NotebookTextEdit(QTextEdit):
             image = image.scaledToWidth(
                 self.MAX_IMAGE_WIDTH, Qt.TransformationMode.SmoothTransformation
             )
-        ba = QByteArray()
-        buf = QBuffer(ba)
-        buf.open(QIODevice.OpenModeFlag.WriteOnly)
-        ok = image.save(buf, "PNG")
-        buf.close()
-        if not ok or ba.isEmpty():
+        png_bytes = self._encode_png(image)
+        if not png_bytes:
             return
-        b64 = bytes(ba.toBase64()).decode('ascii')
+        import base64
+        b64 = base64.b64encode(png_bytes).decode('ascii')
         self.textCursor().insertHtml(
             f'<img src="data:image/png;base64,{b64}" width="{image.width()}" />'
         )
+
+    @staticmethod
+    def _encode_png(image: QImage) -> bytes:
+        """Encode a QImage as PNG in pure Python.
+
+        QImage.save(..., "PNG") segfaults under anaconda because conda's
+        libz clashes with the libpng bundled inside Qt; encoding with
+        Python's own zlib sidesteps Qt's image writer entirely.
+        """
+        image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+        if image.isNull():
+            return b''
+        width, height = image.width(), image.height()
+        ptr = image.constBits()
+        ptr.setsize(image.sizeInBytes())
+        data = bytes(ptr)
+        stride = image.bytesPerLine()
+        # PNG scanlines: filter byte 0 (None) + raw RGBA rows
+        raw = b''.join(
+            b'\x00' + data[y * stride: y * stride + width * 4]
+            for y in range(height)
+        )
+
+        def chunk(tag: bytes, payload: bytes) -> bytes:
+            return (struct.pack('>I', len(payload)) + tag + payload
+                    + struct.pack('>I', zlib.crc32(tag + payload) & 0xffffffff))
+
+        ihdr = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
+        return (b'\x89PNG\r\n\x1a\n'
+                + chunk(b'IHDR', ihdr)
+                + chunk(b'IDAT', zlib.compress(raw, 6))
+                + chunk(b'IEND', b''))
 
     # ----- Rich-text formatting ----------------------------------------
 
