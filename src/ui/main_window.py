@@ -671,6 +671,7 @@ class MainWindow(QMainWindow):
     def _on_period_changed(self, days: int):
         """Handle task distribution period change."""
         self._task_dist_days = days
+        self.db.set_setting("task_dist_days", str(days))
         task_stats = self.stats_engine.get_task_time_distribution(days=days)
         self.stats_dashboard.update_task_distribution(task_stats)
         # Also update category distribution with the same period
@@ -802,6 +803,11 @@ class MainWindow(QMainWindow):
         if saved_alarm == "three_times":
             self.notification_service.alarm_mode = NotificationService.ALARM_THREE_TIMES
             self.alarm_btn.setText("🔔 响三下")
+
+        # Restore the task-distribution period (e.g. 近一月) chosen last time
+        saved_days = self.db.get_setting("task_dist_days", "")
+        if saved_days.isdigit():
+            self.stats_dashboard.set_period(int(saved_days))
 
         if self._dark_mode:
             self._apply_theme()

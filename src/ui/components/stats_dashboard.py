@@ -1194,6 +1194,12 @@ class StatsDashboard(QWidget):
         self._chart_title.setText("任务时间统计")
         self.period_changed.emit(days)
 
+    def set_period(self, days: int):
+        """Programmatically select a period (e.g. when restoring preferences)."""
+        if days not in {d for _, d in self.PERIODS}:
+            return
+        self._on_period_clicked(days)
+
     def _on_chart_toggle(self):
         """Toggle between bar chart and pie chart."""
         if self._chart_mode == "bar":
