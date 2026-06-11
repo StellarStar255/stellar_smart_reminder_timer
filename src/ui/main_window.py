@@ -624,6 +624,11 @@ class MainWindow(QMainWindow):
         cursor = self.db.execute("SELECT key, value FROM app_settings")
         settings = {row['key']: row['value'] for row in cursor.fetchall()}
 
+        cursor = self.db.execute(
+            "SELECT task_name, content FROM task_notebooks WHERE content != ''"
+        )
+        notebooks = {row['task_name']: row['content'] for row in cursor.fetchall()}
+
         return {
             'app': 'stellarpulse',
             'version': 1,
@@ -631,6 +636,7 @@ class MainWindow(QMainWindow):
             'categories': [c.to_dict() for c in self.category_repo.get_all()],
             'presets': [p.to_dict() for p in self.preset_repo.get_all()],
             'settings': settings,
+            'notebooks': notebooks,
         }
 
     def _on_save_config(self):
@@ -683,7 +689,8 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(
             self, "导出配置",
-            f"已导出 {len(data['presets'])} 个预设、{len(data['categories'])} 个分类和全部设置到：\n{path}"
+            f"已导出 {len(data['presets'])} 个预设、{len(data['categories'])} 个分类、"
+            f"{len(data['notebooks'])} 篇笔记和全部设置到：\n{path}"
         )
 
     def _on_import_config(self):
@@ -762,6 +769,16 @@ class MainWindow(QMainWindow):
                 ))
                 added += 1
 
+        # Merge notebooks: only fill in tasks whose local notebook is empty,
+        # so existing local notes are never overwritten
+        notebooks_added = 0
+        for task_name, content in data.get('notebooks', {}).items():
+            if not content:
+                continue
+            if not self.db.get_notebook(task_name):
+                self.db.save_notebook(task_name, content)
+                notebooks_added += 1
+
         # Overwrite settings and re-apply them to the UI
         settings = data.get('settings', {})
         for key, value in settings.items():
@@ -779,8 +796,8 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(
             self, "导入配置",
-            f"导入完成：新增 {added} 个预设、更新 {updated} 个预设、新增 {new_cats} 个分类，"
-            f"并应用了 {len(settings)} 项设置。"
+            f"导入完成：新增 {added} 个预设、更新 {updated} 个预设、新增 {new_cats} 个分类、"
+            f"导入 {notebooks_added} 篇笔记，并应用了 {len(settings)} 项设置。"
         )
 
     def _apply_imported_settings(self, settings: dict):
