@@ -249,14 +249,12 @@ class MainWindow(QMainWindow):
 
         # Main scrollable content area (timer cards at top, stats below)
         main_scroll = QScrollArea()
+        self._main_scroll = main_scroll
         main_scroll.setWidgetResizable(True)
-        main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        main_scroll.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-        """)
+        # Show a horizontal scroll bar when timer cards overflow, so it's
+        # obvious there is more content to the left/right.
+        main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._style_main_scroll()
 
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
@@ -743,10 +741,46 @@ class MainWindow(QMainWindow):
         self.db.set_setting("dark_mode", "1" if self._dark_mode else "0")
         self._apply_theme()
 
+    def _style_main_scroll(self):
+        """Style the main scroll area with an always-visible horizontal bar."""
+        if self._dark_mode:
+            handle = "#5a5a5e"
+            handle_hover = "#6e6e73"
+        else:
+            handle = "#c0c0c0"
+            handle_hover = "#a0a0a5"
+        self._main_scroll.setStyleSheet(f"""
+            QScrollArea {{
+                border: none;
+                background-color: transparent;
+            }}
+            QScrollBar:horizontal {{
+                height: 10px;
+                background: transparent;
+                margin: 2px 0;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {handle};
+                border-radius: 3px;
+                min-width: 40px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: {handle_hover};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0;
+                height: 0;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: transparent;
+            }}
+        """)
+
     def _apply_theme(self):
         """Apply current theme."""
         theme = DARK_THEME if self._dark_mode else LIGHT_THEME
         self.setStyleSheet(theme.get_stylesheet())
+        self._style_main_scroll()
 
         # Update theme button
         self.theme_btn.setText("☀️ 浅色" if self._dark_mode else "🌙 深色")
