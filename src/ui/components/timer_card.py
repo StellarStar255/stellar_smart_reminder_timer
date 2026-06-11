@@ -214,8 +214,10 @@ class TimerCard(QFrame):
             }
         """)
 
-        btn_layout.addWidget(self.toggle_btn)
-        btn_layout.addWidget(self.stop_btn)
+        # Equal stretch makes the layout give both buttons exactly the same
+        # width, so they always render identical in size.
+        btn_layout.addWidget(self.toggle_btn, 1)
+        btn_layout.addWidget(self.stop_btn, 1)
 
         layout.addLayout(btn_layout)
 
