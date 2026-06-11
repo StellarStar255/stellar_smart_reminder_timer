@@ -251,17 +251,19 @@ class MainWindow(QMainWindow):
         self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
         header_layout.addWidget(self.save_config_btn)
 
-        # Import/export menu button (file-based config transfer)
+        # Import/export menu button (file-based config transfer).
+        # The menu is shown via exec() on click instead of setMenu():
+        # press-popup menus flicker on macOS with styled (rounded) QMenus.
         self.transfer_btn = QPushButton("📤 导入导出")
         self.transfer_btn.setFixedHeight(32)
         self.transfer_btn.setToolTip("把预设和设置导出为文件，或从文件导入")
-        transfer_menu = QMenu(self)
-        export_action = transfer_menu.addAction("导出配置到文件…")
+        self._transfer_menu = QMenu(self)
+        export_action = self._transfer_menu.addAction("导出配置到文件…")
         export_action.triggered.connect(self._on_export_config)
-        import_action = transfer_menu.addAction("从文件导入配置…")
+        import_action = self._transfer_menu.addAction("从文件导入配置…")
         import_action.triggered.connect(self._on_import_config)
-        self.transfer_btn.setMenu(transfer_menu)
-        self._style_transfer_btn()
+        self.transfer_btn.clicked.connect(self._show_transfer_menu)
+        self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
         header_layout.addWidget(self.transfer_btn)
 
         header_layout.addStretch()
@@ -1023,15 +1025,11 @@ class MainWindow(QMainWindow):
         self.db.set_setting("dark_mode", "1" if self._dark_mode else "0")
         self._apply_theme()
 
-    def _style_transfer_btn(self):
-        """Match the other header buttons but hide the default menu arrow,
-        which otherwise renders squeezed into the button corner."""
-        self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet() + """
-            QPushButton::menu-indicator {
-                image: none;
-                width: 0px;
-            }
-        """)
+    def _show_transfer_menu(self):
+        """Pop the import/export menu just below its button."""
+        from PyQt6.QtCore import QPoint
+        pos = self.transfer_btn.mapToGlobal(QPoint(0, self.transfer_btn.height() + 4))
+        self._transfer_menu.exec(pos)
 
     def _style_main_scroll(self):
         """Style the scroll areas; the card row gets a visible horizontal bar."""
@@ -1186,7 +1184,7 @@ class MainWindow(QMainWindow):
             """)
 
         self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
-        self._style_transfer_btn()
+        self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
 
         # Update components
         self.sidebar.set_dark_mode(self._dark_mode)
