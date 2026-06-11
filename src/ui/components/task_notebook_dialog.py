@@ -197,6 +197,82 @@ class _NotebookTextEdit(QTextEdit):
             f'<img src="data:image/png;base64,{b64}" width="{image.width()}" />'
         )
 
+    # ----- Image copy (notebook -> other apps) ---------------------------
+
+    def createMimeDataFromSelection(self):
+        """Attach real image data when the selection contains an image, so
+        Cmd+C can paste into external apps (not just HTML markup).
+
+        Note: the QTextEditMimeData returned by super() generates its format
+        list lazily from the document fragment and ignores setImageData, so
+        a fresh QMimeData must be built instead."""
+        base = super().createMimeDataFromSelection()
+        try:
+            image = self._first_image_in_selection()
+            if image is None or image.isNull():
+                return base
+            from PyQt6.QtCore import QMimeData
+            mime = QMimeData()
+            mime.setHtml(base.html())
+            mime.setText(base.text())
+            mime.setImageData(image)
+            return mime
+        except Exception:
+            return base
+
+    def _first_image_in_selection(self):
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return None
+        start, end = cursor.selectionStart(), cursor.selectionEnd()
+        doc = self.document()
+        block = doc.findBlock(start)
+        while block.isValid() and block.position() < end:
+            it = block.begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                if frag.position() < end and frag.position() + frag.length() > start:
+                    fmt = frag.charFormat()
+                    if fmt.isImageFormat():
+                        image = self._resolve_image(fmt.toImageFormat().name())
+                        if image is not None:
+                            return image
+                it += 1
+            block = block.next()
+        return None
+
+    def image_at_position(self, pos):
+        """Return the QImage under the mouse position, if any."""
+        cursor = self.cursorForPosition(pos)
+        fmt = cursor.charFormat()
+        if not fmt.isImageFormat():
+            cursor.movePosition(QTextCursor.MoveOperation.Right,
+                                QTextCursor.MoveMode.KeepAnchor)
+            fmt = cursor.charFormat()
+        if fmt.isImageFormat():
+            return self._resolve_image(fmt.toImageFormat().name())
+        return None
+
+    def _resolve_image(self, src: str):
+        """Resolve an <img> source (data URI) to a QImage."""
+        from PyQt6.QtGui import QTextDocument
+        resource = self.document().resource(
+            QTextDocument.ResourceType.ImageResource.value, QUrl(src)
+        )
+        if isinstance(resource, QImage) and not resource.isNull():
+            return resource
+        if isinstance(resource, QPixmap) and not resource.isNull():
+            return resource.toImage()
+        if src.startswith('data:image/') and ',' in src:
+            import base64
+            try:
+                image = QImage.fromData(base64.b64decode(src.split(',', 1)[1]))
+                if not image.isNull():
+                    return image
+            except (ValueError, TypeError):
+                pass
+        return None
+
     @staticmethod
     def _encode_png(image: QImage) -> bytes:
         """Encode a QImage as PNG in pure Python.
@@ -445,7 +521,7 @@ class TaskNotebookDialog(QDialog):
         menu.addSeparator()
         clear_all_action = menu.addAction("清除所有格式")
 
-        # --- Timestamp / link ------------------------------------------
+        # --- Timestamp / link / image -----------------------------------
         menu.addSeparator()
         timestamp_action = menu.addAction("插入时间戳")
 
@@ -454,6 +530,12 @@ class TaskNotebookDialog(QDialog):
         if url:
             menu.addSeparator()
             open_link_action = menu.addAction("在浏览器中打开链接")
+
+        image_under_cursor = self._editor.image_at_position(pos)
+        copy_image_action = None
+        if image_under_cursor is not None:
+            menu.addSeparator()
+            copy_image_action = menu.addAction("复制图片")
 
         action = menu.exec(self._editor.mapToGlobal(pos))
         if action is None:
@@ -474,6 +556,9 @@ class TaskNotebookDialog(QDialog):
             self._editor.textCursor().insertText(stamp)
         elif open_link_action is not None and action == open_link_action:
             QDesktopServices.openUrl(QUrl(url))
+        elif copy_image_action is not None and action == copy_image_action:
+            from PyQt6.QtGui import QGuiApplication
+            QGuiApplication.clipboard().setImage(image_under_cursor)
 
     def closeEvent(self, event):
         """Auto-save content on close (as HTML to preserve formatting)."""
