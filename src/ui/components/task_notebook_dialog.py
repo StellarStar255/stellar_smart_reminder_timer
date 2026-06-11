@@ -127,32 +127,61 @@ class _NotebookTextEdit(QTextEdit):
     IMAGE_FILE_SUFFIXES = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.tiff')
 
     def canInsertFromMimeData(self, source) -> bool:
-        if source.hasImage():
-            return True
-        return super().canInsertFromMimeData(source)
+        # NOTE: any exception escaping these C++ virtual overrides aborts the
+        # whole process under PyQt6, so they must never raise.
+        try:
+            if source.hasImage():
+                return True
+            return super().canInsertFromMimeData(source)
+        except Exception:
+            return False
 
     def insertFromMimeData(self, source):
         """Embed pasted/dropped images as base64 data URIs so they survive
         toHtml() round-trips (database save, export/import)."""
-        if source.hasImage():
-            image = QImage(source.imageData())
-            if not image.isNull():
+        try:
+            image = self._image_from_mime_data(source)
+        except Exception:
+            image = None
+        if image is not None and not image.isNull():
+            try:
                 self._insert_image(image)
                 return
+            except Exception:
+                pass  # fall through to the default text handler
+        super().insertFromMimeData(source)
+
+    def _image_from_mime_data(self, source):
+        """Extract a QImage from mime data, tolerating the many shapes the
+        macOS clipboard can deliver (QImage, QPixmap, raw bytes, file URLs)."""
+        if source.hasImage():
+            raw = source.imageData()
+            if isinstance(raw, QImage) and not raw.isNull():
+                return QImage(raw)  # detached copy
+            if isinstance(raw, QPixmap) and not raw.isNull():
+                return raw.toImage()
+        # Fall back to decoding the raw clipboard bytes (screenshots on
+        # macOS are typically provided as TIFF/PNG data)
+        for mime_type in ('image/png', 'image/tiff', 'image/jpeg',
+                          'image/bmp', 'image/webp'):
+            if source.hasFormat(mime_type):
+                image = QImage()
+                if image.loadFromData(source.data(mime_type)) and not image.isNull():
+                    return image
         if source.hasUrls():
-            inserted = False
             for url in source.urls():
                 if (url.isLocalFile()
                         and url.toLocalFile().lower().endswith(self.IMAGE_FILE_SUFFIXES)):
                     image = QImage(url.toLocalFile())
                     if not image.isNull():
-                        self._insert_image(image)
-                        inserted = True
-            if inserted:
-                return
-        super().insertFromMimeData(source)
+                        return image
+        return None
 
     def _insert_image(self, image: QImage):
+        # Normalize exotic clipboard pixel formats before scaling/encoding
+        image = image.convertToFormat(QImage.Format.Format_ARGB32)
+        if image.isNull():
+            return
         if image.width() > self.MAX_IMAGE_WIDTH:
             image = image.scaledToWidth(
                 self.MAX_IMAGE_WIDTH, Qt.TransformationMode.SmoothTransformation
@@ -160,8 +189,10 @@ class _NotebookTextEdit(QTextEdit):
         ba = QByteArray()
         buf = QBuffer(ba)
         buf.open(QIODevice.OpenModeFlag.WriteOnly)
-        image.save(buf, "PNG")
+        ok = image.save(buf, "PNG")
         buf.close()
+        if not ok or ba.isEmpty():
+            return
         b64 = bytes(ba.toBase64()).decode('ascii')
         self.textCursor().insertHtml(
             f'<img src="data:image/png;base64,{b64}" width="{image.width()}" />'
