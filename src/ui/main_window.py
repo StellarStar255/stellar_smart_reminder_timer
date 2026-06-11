@@ -567,19 +567,11 @@ class MainWindow(QMainWindow):
                 self._refresh_presets()
 
     def _on_save_config(self):
-        """Export presets, categories and app settings to a JSON backup file."""
+        """Silently save all settings and write a JSON backup to the app dir."""
         import json
         from pathlib import Path
-        from PyQt6.QtWidgets import QFileDialog
 
-        default_name = f"stellarpulse_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存配置", str(Path.home() / default_name), "JSON 文件 (*.json)"
-        )
-        if not path:
-            return
-
-        # Flush current UI preferences so the export reflects what's on screen
+        # Flush current UI preferences so everything on screen is persisted
         self.db.set_setting("dark_mode", "1" if self._dark_mode else "0")
         alarm = ("three_times"
                  if self.notification_service.alarm_mode == NotificationService.ALARM_THREE_TIMES
@@ -603,16 +595,22 @@ class MainWindow(QMainWindow):
         }
 
         try:
-            with open(path, 'w', encoding='utf-8') as f:
+            backup_path = Path.home() / ".stellarpulse" / "config_backup.json"
+            backup_path.parent.mkdir(exist_ok=True)
+            with open(backup_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except OSError as e:
             QMessageBox.warning(self, "保存配置", f"保存失败：{e}")
             return
 
-        QMessageBox.information(
-            self, "保存配置",
-            f"已导出 {len(data['presets'])} 个预设、{len(data['categories'])} 个分类和应用设置到：\n{path}"
-        )
+        # Brief inline feedback on the button itself, no popup
+        self.save_config_btn.setText("✅ 已保存")
+        self.save_config_btn.setEnabled(False)
+        QTimer.singleShot(1500, self._reset_save_config_btn)
+
+    def _reset_save_config_btn(self):
+        self.save_config_btn.setText("💾 保存配置")
+        self.save_config_btn.setEnabled(True)
 
     def _on_manage_presets(self):
         """Open the list-style preset manager dialog."""
