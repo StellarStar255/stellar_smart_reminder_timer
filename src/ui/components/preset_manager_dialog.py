@@ -1,5 +1,6 @@
 """Preset management dialog: browse, search, edit and batch-manage all presets."""
 
+import json
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -9,9 +10,12 @@ from PyQt6.QtWidgets import (
     QHeaderView, QMenu, QMessageBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
 
 from src.models import Preset, Category
 from src.ui.components.preset_bar import EditPresetDialog
+from src.ui.components.stats_dashboard import StatsDashboard
+from src.ui.components.task_notebook_dialog import TaskNotebookDialog
 
 # Item data roles
 _ID_ROLE = Qt.ItemDataRole.UserRole          # preset id, stored on column 0
@@ -112,7 +116,7 @@ class PresetManagerDialog(QDialog):
         bottom.addWidget(self.count_label)
         bottom.addStretch()
 
-        hint = QLabel("双击编辑 · 右键更多操作")
+        hint = QLabel("双击编辑笔记本 · 右键更多操作")
         hint.setObjectName("hintLabel")
         bottom.addWidget(hint)
 
@@ -136,10 +140,25 @@ class PresetManagerDialog(QDialog):
 
     # --- Data loading & filtering ---
 
+    def _load_task_star_ratings(self) -> Dict[str, int]:
+        """Load the task-name -> star rating map set via the stats chart."""
+        db = getattr(self.preset_manager, 'db', None)
+        if db is None:
+            return {}
+        try:
+            raw = db.get_setting(StatsDashboard.STAR_RATINGS_KEY, "{}")
+            data = json.loads(raw) if raw else {}
+            return {str(name): int(rating) for name, rating in data.items()}
+        except (ValueError, TypeError):
+            return {}
+
     def _reload(self):
         """Reload all presets from the manager into the table."""
         presets = self.preset_manager.get_all()
         self._presets_by_id = {p.id: p for p in presets}
+        # Stars can come from the preset itself or from chart task ratings,
+        # which are keyed by task name; show whichever is higher.
+        task_ratings = self._load_task_star_ratings()
 
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(presets))
@@ -162,10 +181,12 @@ class PresetManagerDialog(QDialog):
             dur_item.setData(_SORT_ROLE, preset.duration_seconds)
             self.table.setItem(row, self.COL_DURATION, dur_item)
 
-            rating = max(0, min(5, preset.star_rating or 0))
+            rating = max(preset.star_rating or 0, task_ratings.get(preset.name, 0))
+            rating = max(0, min(5, rating))
             star_item = _SortItem("★" * rating if rating else "—")
             star_item.setData(_SORT_ROLE, rating)
-            star_item.setForeground(Qt.GlobalColor.darkYellow)
+            if rating:
+                star_item.setForeground(QColor("#FFB800"))
             self.table.setItem(row, self.COL_STARS, star_item)
 
             count_item = _SortItem(f"{preset.use_count}次" if preset.use_count else "—")
@@ -230,7 +251,15 @@ class PresetManagerDialog(QDialog):
     def _on_double_clicked(self, row: int, _column: int):
         preset = self._preset_at_row(row)
         if preset:
-            self._edit_preset(preset)
+            self._edit_notebook(preset)
+
+    def _edit_notebook(self, preset: Preset):
+        """Open the rich-text notebook editor for this preset's task name."""
+        db = getattr(self.preset_manager, 'db', None)
+        if db is None:
+            return
+        dialog = TaskNotebookDialog(db, preset.name, self._dark_mode, self)
+        dialog.exec()
 
     def _edit_current(self):
         selected = self._selected_presets()
@@ -298,6 +327,8 @@ class PresetManagerDialog(QDialog):
         menu = QMenu(self)
         edit_action = menu.addAction("编辑预设")
         edit_action.setEnabled(len(selected) == 1)
+        notebook_action = menu.addAction("编辑笔记本")
+        notebook_action.setEnabled(len(selected) == 1)
 
         cat_menu = menu.addMenu(f"设置分类（{len(selected)} 项）")
         for cat in self.categories:
@@ -310,6 +341,8 @@ class PresetManagerDialog(QDialog):
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
         if action == edit_action:
             self._edit_preset(selected[0])
+        elif action == notebook_action:
+            self._edit_notebook(selected[0])
         elif action == delete_action:
             self._delete_selected()
 
