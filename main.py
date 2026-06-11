@@ -14,6 +14,17 @@ os.makedirs(os.path.dirname(_CRASH_LOG_PATH), exist_ok=True)
 _crash_log_file = open(_CRASH_LOG_PATH, "a")
 faulthandler.enable(_crash_log_file)
 
+# Force Qt to load plugins from THIS interpreter's PyQt6 install. If
+# QT_PLUGIN_PATH points at another Python's PyQt6 (e.g. /Library/Frameworks
+# Python 3.13 while running anaconda's 3.12), the process mixes two Qt
+# builds and segfaults deep inside QtGui — seen as a crash in
+# QImage::save() when pasting clipboard images.
+import PyQt6 as _PyQt6
+_qt_plugin_dir = os.path.join(os.path.dirname(_PyQt6.__file__), "Qt6", "plugins")
+if os.path.isdir(_qt_plugin_dir):
+    os.environ["QT_PLUGIN_PATH"] = _qt_plugin_dir
+    os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = os.path.join(_qt_plugin_dir, "platforms")
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt, QEvent, QObject
 from PyQt6.QtGui import QFont, QIcon
