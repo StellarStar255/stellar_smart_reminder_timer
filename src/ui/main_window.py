@@ -243,6 +243,13 @@ class MainWindow(QMainWindow):
         """)
         header_layout.addWidget(self.manage_btn)
 
+        # Preset sort-mode toggle (smart auto-sort <-> manual drag order)
+        self.sort_mode_btn = QPushButton()
+        self.sort_mode_btn.setFixedHeight(32)
+        self.sort_mode_btn.clicked.connect(self._toggle_sort_mode)
+        self.sort_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
+        header_layout.addWidget(self.sort_mode_btn)
+
         # Save-config button (exports presets/categories/settings to JSON)
         self.save_config_btn = QPushButton("💾 保存配置")
         self.save_config_btn.setFixedHeight(32)
@@ -456,6 +463,7 @@ class MainWindow(QMainWindow):
         self.preset_bar.custom_requested.connect(self._on_custom_requested)
         self.preset_bar.preset_deleted.connect(self._on_preset_deleted)
         self.preset_bar.preset_edit_requested.connect(self._on_preset_edit_requested)
+        self.preset_bar.presets_reordered.connect(self._on_presets_reordered)
         self.preset_search_input.textChanged.connect(self.preset_bar._on_search_changed)
 
         # Stats dashboard
@@ -485,7 +493,8 @@ class MainWindow(QMainWindow):
             self._categories[cat.id] = cat
         self.sidebar.set_categories(categories)
 
-        # Load presets (default + custom)
+        # Load presets (default + custom), applying the saved sort mode
+        self._update_sort_mode_ui()
         self._refresh_presets()
 
         # Load active tasks
@@ -511,6 +520,35 @@ class MainWindow(QMainWindow):
             presets = [p for p in self.preset_manager.get_all()
                        if p.category_id == self._selected_category_id]
         self.preset_bar.set_presets(presets)
+
+    def _update_sort_mode_ui(self):
+        """Sync the sort-mode button label and the preset bar's drag state."""
+        manual = self.preset_manager.get_sort_mode() == "manual"
+        if manual:
+            self.sort_mode_btn.setText("✋ 手动排序")
+            self.sort_mode_btn.setToolTip("当前为手动排序，可拖拽调整预设顺序；点击切回智能排序")
+        else:
+            self.sort_mode_btn.setText("🔀 智能排序")
+            self.sort_mode_btn.setToolTip("当前按使用频率和最近使用智能排序；点击切换为手动拖拽排序")
+        self.preset_bar.set_manual_mode(manual)
+
+    def _toggle_sort_mode(self):
+        """Switch between smart auto-sort and manual drag-reorder."""
+        if self.preset_manager.get_sort_mode() == "manual":
+            self.preset_manager.set_sort_mode("smart")
+        else:
+            # Snapshot the current smart order so manual mode starts from
+            # exactly what's on screen instead of stale sort_order values.
+            current = self.preset_manager.get_all()
+            self.preset_manager.reorder([p.id for p in current])
+            self.preset_manager.set_sort_mode("manual")
+        self._update_sort_mode_ui()
+        self._refresh_presets_filtered()
+
+    def _on_presets_reordered(self, ordered_ids):
+        """Persist a manual drag-reorder of presets."""
+        self.preset_manager.reorder(ordered_ids)
+        self._refresh_presets_filtered()
 
     def _create_timer_card(self, task: Task):
         """Create a timer card for a task."""
@@ -1218,6 +1256,7 @@ class MainWindow(QMainWindow):
 
         self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
         self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
+        self.sort_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
 
         # Update components
         self.sidebar.set_dark_mode(self._dark_mode)

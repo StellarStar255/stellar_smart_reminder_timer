@@ -85,6 +85,22 @@ class PresetRepository:
         presets = [self._row_to_preset(row) for row in cursor.fetchall()]
         return self._sort_by_combined_score(presets)
 
+    def get_all_by_sort_order(self) -> List[Preset]:
+        """Get all presets in the user's manually-defined order (sort_order)."""
+        cursor = self.db.execute(
+            "SELECT * FROM presets ORDER BY sort_order, id"
+        )
+        return [self._row_to_preset(row) for row in cursor.fetchall()]
+
+    def set_sort_orders(self, ordered_ids: List[int]):
+        """Persist a manual ordering; sort_order becomes the list index."""
+        for idx, preset_id in enumerate(ordered_ids):
+            self.db.execute(
+                "UPDATE presets SET sort_order=? WHERE id=?",
+                (idx, preset_id)
+            )
+        self.db.commit()
+
     def get_by_category(self, category_id: int) -> List[Preset]:
         """Get presets by category, sorted by combined usage count + recency."""
         cursor = self.db.execute(

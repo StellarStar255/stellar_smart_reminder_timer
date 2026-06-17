@@ -4,9 +4,10 @@ import random
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QPushButton, QDialog, QVBoxLayout,
     QLabel, QLineEdit, QSpinBox, QComboBox, QDialogButtonBox,
-    QScrollArea, QMenu
+    QScrollArea, QMenu, QApplication
 )
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QEvent
+from PyQt6.QtGui import QDrag
 
 from src.models import Preset, Category
 from typing import List
@@ -40,6 +41,9 @@ class PresetButton(QPushButton):
         super().__init__(parent)
         self.preset = preset
         self._dark_mode = False
+        self._draggable = False  # enabled only in manual sort mode
+        self._drag_start_pos = None
+        self.drag_started = False  # suppress the click that follows a drag
 
         # Fixed size so every preset box lines up uniformly; long names are
         # elided with an ellipsis instead of overflowing into the next box.
@@ -144,20 +148,57 @@ class PresetButton(QPushButton):
         elif action and action == delete_action:
             self.delete_requested.emit(self.preset)
 
+    def set_draggable(self, enabled: bool):
+        """Enable/disable drag-to-reorder (manual sort mode only)."""
+        self._draggable = enabled
+        self.setCursor(
+            Qt.CursorShape.OpenHandCursor if enabled
+            else Qt.CursorShape.PointingHandCursor
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+            self.drag_started = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (not self._draggable or self._drag_start_pos is None
+                or not (event.buttons() & Qt.MouseButton.LeftButton)):
+            super().mouseMoveEvent(event)
+            return
+        moved = (event.position().toPoint() - self._drag_start_pos).manhattanLength()
+        if moved < QApplication.startDragDistance():
+            return
+
+        self.drag_started = True
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setText(PresetBar.MIME_TYPE.format(self.preset.id))
+        drag.setMimeData(mime)
+        drag.setPixmap(self.grab())
+        drag.setHotSpot(self._drag_start_pos)
+        drag.exec(Qt.DropAction.MoveAction)
+
 
 class PresetBar(QWidget):
     """Bar containing preset quick-start buttons."""
+
+    # Drag-and-drop payload format; the preset id is interpolated in.
+    MIME_TYPE = "application/x-stellar-preset:{}"
 
     # Signals
     preset_selected = pyqtSignal(object)  # Preset
     custom_requested = pyqtSignal()
     preset_deleted = pyqtSignal(int)  # preset_id
     preset_edit_requested = pyqtSignal(object)  # Preset
+    presets_reordered = pyqtSignal(list)  # ordered list of preset ids
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self._presets: List[Preset] = []
+        self._manual_mode = False
 
         self._setup_ui()
 
@@ -195,6 +236,18 @@ class PresetBar(QWidget):
 
         # Add stretch at the end
         self.layout.addStretch()
+
+        # Accept preset drops on the content widget for drag-reorder.
+        self.scroll_widget.setAcceptDrops(True)
+        self.scroll_widget.installEventFilter(self)
+
+        # Thin vertical line showing where a dragged preset will land.
+        self._drop_indicator = QWidget(self.scroll_widget)
+        self._drop_indicator.setFixedWidth(3)
+        self._drop_indicator.setStyleSheet(
+            "background-color: #007AFF; border-radius: 1px;"
+        )
+        self._drop_indicator.hide()
 
         self.scroll_area.setWidget(self.scroll_widget)
         outer_layout.addWidget(self.scroll_area)
@@ -235,14 +288,110 @@ class PresetBar(QWidget):
         # Add preset buttons after custom button
         for preset in self._presets:
             btn = PresetButton(preset)
-            btn.clicked.connect(lambda checked, p=preset: self._on_preset_clicked(p))
+            btn.set_draggable(self._manual_mode)
+            btn.clicked.connect(lambda checked, b=btn: self._on_preset_clicked(b))
             btn.delete_requested.connect(self._on_preset_delete)
             btn.edit_requested.connect(self._on_preset_edit)
             self.layout.insertWidget(self.layout.count() - 1, btn)
 
-    def _on_preset_clicked(self, preset: Preset):
-        """Handle preset button click."""
-        self.preset_selected.emit(preset)
+    def _on_preset_clicked(self, button: 'PresetButton'):
+        """Handle preset button click (ignored if the click ended a drag)."""
+        if button.drag_started:
+            button.drag_started = False
+            return
+        self.preset_selected.emit(button.preset)
+
+    def set_manual_mode(self, enabled: bool):
+        """Toggle manual drag-reorder mode for the preset buttons."""
+        self._manual_mode = enabled
+        for btn in self._preset_buttons():
+            btn.set_draggable(enabled)
+
+    def _preset_buttons(self) -> List['PresetButton']:
+        """Return the preset buttons in current visual (layout) order."""
+        buttons = []
+        for i in range(self.layout.count()):
+            w = self.layout.itemAt(i).widget()
+            if isinstance(w, PresetButton):
+                buttons.append(w)
+        return buttons
+
+    def _drop_index_among(self, buttons: List['PresetButton'], x: int) -> int:
+        """Index (within `buttons`) at which a drop at scroll-widget x lands."""
+        for idx, btn in enumerate(buttons):
+            if x < btn.x() + btn.width() / 2:
+                return idx
+        return len(buttons)
+
+    def eventFilter(self, obj, event):
+        """Handle drag-reorder events on the scrollable content widget."""
+        if obj is not self.scroll_widget or not self._manual_mode:
+            return super().eventFilter(obj, event)
+
+        etype = event.type()
+        if etype == QEvent.Type.DragEnter:
+            if event.mimeData().hasText() and event.mimeData().text().startswith(
+                    self.MIME_TYPE.format("")[:-1]):
+                event.acceptProposedAction()
+                return True
+        elif etype == QEvent.Type.DragMove:
+            buttons = self._preset_buttons()
+            index = self._drop_index_among(buttons, int(event.position().x()))
+            self._show_drop_indicator(buttons, index)
+            event.acceptProposedAction()
+            return True
+        elif etype == QEvent.Type.DragLeave:
+            self._drop_indicator.hide()
+            return True
+        elif etype == QEvent.Type.Drop:
+            self._drop_indicator.hide()
+            self._handle_drop(event)
+            event.acceptProposedAction()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _show_drop_indicator(self, buttons: List['PresetButton'], index: int):
+        """Position the vertical drop indicator before button `index`."""
+        if not buttons:
+            self._drop_indicator.hide()
+            return
+        if index < len(buttons):
+            x = buttons[index].x() - 6
+            top = buttons[index].y()
+            height = buttons[index].height()
+        else:
+            last = buttons[-1]
+            x = last.x() + last.width() + 3
+            top = last.y()
+            height = last.height()
+        self._drop_indicator.setGeometry(x, top, 3, height)
+        self._drop_indicator.raise_()
+        self._drop_indicator.show()
+
+    def _handle_drop(self, event):
+        """Reorder presets after a drop and emit the new id ordering."""
+        text = event.mimeData().text()
+        prefix = self.MIME_TYPE.format("")
+        try:
+            source_id = int(text[len(prefix):])
+        except (ValueError, TypeError):
+            return
+
+        buttons = self._preset_buttons()
+        ids = [b.preset.id for b in buttons]
+        if source_id not in ids:
+            return
+
+        target = self._drop_index_among(buttons, int(event.position().x()))
+        old = ids.index(source_id)
+        ids.pop(old)
+        # Account for the removed item shifting indices to its right.
+        if target > old:
+            target -= 1
+        ids.insert(target, source_id)
+
+        if ids != [b.preset.id for b in buttons]:
+            self.presets_reordered.emit(ids)
 
     def _on_search_changed(self, text: str):
         """Filter preset buttons based on search keywords (space-separated, all must match)."""

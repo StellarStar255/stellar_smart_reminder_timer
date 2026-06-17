@@ -11,12 +11,31 @@ from src.data.repositories import PresetRepository
 class PresetManager:
     """Manages timer presets with smart recommendations."""
 
+    SORT_MODE_KEY = "preset_sort_mode"
+
     def __init__(self, db: Database):
         self.db = db
         self.preset_repo = PresetRepository(db)
 
+    def get_sort_mode(self) -> str:
+        """Return the preset ordering mode: 'smart' (default) or 'manual'."""
+        mode = self.db.get_setting(self.SORT_MODE_KEY, "smart")
+        return mode if mode in ("smart", "manual") else "smart"
+
+    def set_sort_mode(self, mode: str):
+        """Persist the preset ordering mode ('smart' or 'manual')."""
+        if mode not in ("smart", "manual"):
+            mode = "smart"
+        self.db.set_setting(self.SORT_MODE_KEY, mode)
+
+    def reorder(self, ordered_ids: List[int]):
+        """Persist a manual ordering of presets by their ids."""
+        self.preset_repo.set_sort_orders(ordered_ids)
+
     def get_all(self) -> List[Preset]:
-        """Get all presets."""
+        """Get all presets, honouring the current sort mode."""
+        if self.get_sort_mode() == "manual":
+            return self.preset_repo.get_all_by_sort_order()
         return self.preset_repo.get_all()
 
     def get_by_id(self, preset_id: int) -> Optional[Preset]:
