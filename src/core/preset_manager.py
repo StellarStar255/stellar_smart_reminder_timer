@@ -12,19 +12,20 @@ class PresetManager:
     """Manages timer presets with smart recommendations."""
 
     SORT_MODE_KEY = "preset_sort_mode"
+    SORT_MODES = ("smart", "recent", "manual")
 
     def __init__(self, db: Database):
         self.db = db
         self.preset_repo = PresetRepository(db)
 
     def get_sort_mode(self) -> str:
-        """Return the preset ordering mode: 'smart' (default) or 'manual'."""
+        """Return the ordering mode: 'smart' (default), 'recent' or 'manual'."""
         mode = self.db.get_setting(self.SORT_MODE_KEY, "smart")
-        return mode if mode in ("smart", "manual") else "smart"
+        return mode if mode in self.SORT_MODES else "smart"
 
     def set_sort_mode(self, mode: str):
-        """Persist the preset ordering mode ('smart' or 'manual')."""
-        if mode not in ("smart", "manual"):
+        """Persist the preset ordering mode."""
+        if mode not in self.SORT_MODES:
             mode = "smart"
         self.db.set_setting(self.SORT_MODE_KEY, mode)
 
@@ -34,8 +35,11 @@ class PresetManager:
 
     def get_all(self) -> List[Preset]:
         """Get all presets, honouring the current sort mode."""
-        if self.get_sort_mode() == "manual":
+        mode = self.get_sort_mode()
+        if mode == "manual":
             return self.preset_repo.get_all_by_sort_order()
+        if mode == "recent":
+            return self.preset_repo.get_all_by_recent()
         return self.preset_repo.get_all()
 
     def get_by_id(self, preset_id: int) -> Optional[Preset]:

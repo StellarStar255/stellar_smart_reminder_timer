@@ -85,6 +85,18 @@ class PresetRepository:
         presets = [self._row_to_preset(row) for row in cursor.fetchall()]
         return self._sort_by_combined_score(presets)
 
+    def get_all_by_recent(self) -> List[Preset]:
+        """Get all presets ordered by most-recently-used first.
+
+        Never-used presets (NULL last_used_at) sort to the end; ISO timestamps
+        compare correctly as strings.
+        """
+        cursor = self.db.execute(
+            "SELECT * FROM presets "
+            "ORDER BY last_used_at IS NULL, last_used_at DESC, sort_order, id"
+        )
+        return [self._row_to_preset(row) for row in cursor.fetchall()]
+
     def get_all_by_sort_order(self) -> List[Preset]:
         """Get all presets in the user's manually-defined order (sort_order)."""
         cursor = self.db.execute(

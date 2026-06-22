@@ -523,25 +523,31 @@ class MainWindow(QMainWindow):
 
     def _update_sort_mode_ui(self):
         """Sync the sort-mode button label and the preset bar's drag state."""
-        manual = self.preset_manager.get_sort_mode() == "manual"
-        if manual:
+        mode = self.preset_manager.get_sort_mode()
+        if mode == "manual":
             self.sort_mode_btn.setText("✋ 手动排序")
-            self.sort_mode_btn.setToolTip("当前为手动排序，可拖拽调整预设顺序；点击切回智能排序")
+            self.sort_mode_btn.setToolTip("当前为手动排序，可拖拽调整预设顺序；点击切换为智能排序")
+        elif mode == "recent":
+            self.sort_mode_btn.setText("🕒 最近使用")
+            self.sort_mode_btn.setToolTip("当前按最近使用时间排序；点击切换为手动拖拽排序")
         else:
             self.sort_mode_btn.setText("🔀 智能排序")
-            self.sort_mode_btn.setToolTip("当前按使用频率和最近使用智能排序；点击切换为手动拖拽排序")
-        self.preset_bar.set_manual_mode(manual)
+            self.sort_mode_btn.setToolTip("当前按使用频率和最近使用智能排序；点击切换为最近使用排序")
+        self.preset_bar.set_manual_mode(mode == "manual")
 
     def _toggle_sort_mode(self):
-        """Switch between smart auto-sort and manual drag-reorder."""
-        if self.preset_manager.get_sort_mode() == "manual":
-            self.preset_manager.set_sort_mode("smart")
-        else:
-            # Snapshot the current smart order so manual mode starts from
+        """Cycle preset ordering: smart -> recent -> manual -> smart."""
+        mode = self.preset_manager.get_sort_mode()
+        if mode == "smart":
+            self.preset_manager.set_sort_mode("recent")
+        elif mode == "recent":
+            # Snapshot the current (recent) order so manual mode starts from
             # exactly what's on screen instead of stale sort_order values.
             current = self.preset_manager.get_all()
             self.preset_manager.reorder([p.id for p in current])
             self.preset_manager.set_sort_mode("manual")
+        else:
+            self.preset_manager.set_sort_mode("smart")
         self._update_sort_mode_ui()
         self._refresh_presets_filtered()
 
