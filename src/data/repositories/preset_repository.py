@@ -137,6 +137,19 @@ class PresetRepository:
         )
         self.db.commit()
 
+    def touch_last_used(self, preset_id: int):
+        """Update only last_used_at (recency) without bumping use_count.
+
+        Used when a paused timer is resumed: it should affect "最近使用"
+        ordering but not inflate the usage count.
+        """
+        now = datetime.now().isoformat()
+        self.db.execute(
+            "UPDATE presets SET last_used_at = ? WHERE id=?",
+            (now, preset_id)
+        )
+        self.db.commit()
+
     def find_by_name(self, name: str) -> Optional[Preset]:
         """Find the most-used preset by name."""
         cursor = self.db.execute(

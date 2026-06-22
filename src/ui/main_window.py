@@ -989,6 +989,24 @@ class MainWindow(QMainWindow):
         task = self.timer_engine.get_task(task_id)
         if task and task_id in self._timer_cards:
             self._timer_cards[task_id].update_task(task)
+        # Resuming a paused timer should bump its preset's recency so
+        # "最近使用"/智能排序 surface the just-activated timer.
+        if task and task.status == TaskStatus.RUNNING:
+            self._touch_preset_for_task(task)
+
+    def _touch_preset_for_task(self, task: Task):
+        """Refresh the recency of the preset matching a task, then re-sort."""
+        preset = (
+            self.preset_repo.find_by_name_and_duration(
+                task.name, task.duration_seconds)
+            or self.preset_repo.find_by_name(task.name)
+        )
+        if not preset:
+            return
+        self.preset_manager.touch_last_used(preset.id)
+        # Manual order is fixed by the user, so don't disturb it.
+        if self.preset_manager.get_sort_mode() != "manual":
+            self._refresh_presets_filtered()
 
     def _on_card_stop(self, task_id: int):
         """Handle card stop button."""

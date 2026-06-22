@@ -101,3 +101,7 @@ class PresetManager:
     def record_usage(self, preset_id: int):
         """Record preset usage."""
         self.preset_repo.increment_use_count(preset_id)
+
+    def touch_last_used(self, preset_id: int):
+        """Bump recency only (e.g. on resume) without changing use_count."""
+        self.preset_repo.touch_last_used(preset_id)
