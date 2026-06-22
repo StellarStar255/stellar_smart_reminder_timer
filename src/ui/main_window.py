@@ -620,6 +620,7 @@ class MainWindow(QMainWindow):
         task = self.task_manager.create_from_preset(preset)
         self._create_timer_card(task)
         self.task_manager.start_task(task.id)
+        self._move_card_to_front(task.id)
         # Refresh presets so ordering reflects updated use_count
         self._refresh_presets_filtered()
 
@@ -638,6 +639,7 @@ class MainWindow(QMainWindow):
                 )
                 self._create_timer_card(task)
                 self.task_manager.start_task(task.id)
+                self._move_card_to_front(task.id)
 
                 # Auto-save as preset for future reuse (dedup by name+duration)
                 existing = self.preset_repo.find_by_name_and_duration(
@@ -990,9 +992,11 @@ class MainWindow(QMainWindow):
         if task and task_id in self._timer_cards:
             self._timer_cards[task_id].update_task(task)
         # Resuming a paused timer should bump its preset's recency so
-        # "最近使用"/智能排序 surface the just-activated timer.
+        # "最近使用"/智能排序 surface the just-activated timer, and move the
+        # card itself to the front of the row.
         if task and task.status == TaskStatus.RUNNING:
             self._touch_preset_for_task(task)
+            self._move_card_to_front(task_id)
 
     def _touch_preset_for_task(self, task: Task):
         """Refresh the recency of the preset matching a task, then re-sort."""
@@ -1026,6 +1030,7 @@ class MainWindow(QMainWindow):
             task = self.task_manager.create_from_preset(preset)
             self._create_timer_card(task)
             self.task_manager.start_task(task.id)
+            self._move_card_to_front(task.id)
             self._refresh_presets_filtered()
 
     def _show_popup(self, title: str, message: str, task: Task):
@@ -1051,6 +1056,7 @@ class MainWindow(QMainWindow):
             self._remove_timer_card(task.id)
             self._create_timer_card(new_task)
             self.task_manager.start_task(new_task.id)
+            self._move_card_to_front(new_task.id)
         else:
             # Remove completed card
             self._remove_timer_card(task.id)
@@ -1436,6 +1442,43 @@ class MainWindow(QMainWindow):
             if isinstance(w, TimerCard):
                 order_mapping.append((i, w.task.id))
         self.task_repo.update_display_orders(order_mapping)
+
+    def _move_card_to_front(self, task_id: int):
+        """Move a timer card to the front of the row and persist the order.
+
+        Called whenever a timer is started or resumed so the most recently
+        activated card sits first, mirroring the preset "最近使用" ordering.
+        """
+        if task_id not in self._timer_cards:
+            return
+
+        src_idx = None
+        first_card_idx = None
+        for i in range(self.timer_layout.count()):
+            w = self.timer_layout.itemAt(i).widget()
+            if isinstance(w, TimerCard):
+                if first_card_idx is None:
+                    first_card_idx = i
+                if w.task.id == task_id:
+                    src_idx = i
+
+        if src_idx is None or first_card_idx is None or src_idx == first_card_idx:
+            return
+
+        # src_idx > first_card_idx here, so removing it doesn't shift the
+        # front position; re-insert the card at the front.
+        item = self.timer_layout.takeAt(src_idx)
+        self.timer_layout.insertWidget(first_card_idx, item.widget())
+
+        order_mapping = []
+        for i in range(self.timer_layout.count()):
+            w = self.timer_layout.itemAt(i).widget()
+            if isinstance(w, TimerCard):
+                order_mapping.append((len(order_mapping), w.task.id))
+        self.task_repo.update_display_orders(order_mapping)
+
+        # Scroll back to the start so the just-activated card is visible.
+        self.cards_scroll.horizontalScrollBar().setValue(0)
 
     def closeEvent(self, event):
         """Handle window close - minimize to tray instead of quitting."""
