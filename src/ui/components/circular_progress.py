@@ -28,9 +28,18 @@ class CircularProgress(QWidget):
         # Dimensions
         self._line_width = 8
         self._min_size = 120
+        self._compact = False
 
         self.setMinimumSize(self._min_size, self._min_size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def setCompact(self, enabled: bool):
+        """Compact mode: thin ring without inner text, for small list rows."""
+        self._compact = enabled
+        self._line_width = 4 if enabled else 8
+        self._min_size = 36 if enabled else 120
+        self.setMinimumSize(self._min_size, self._min_size)
+        self.update()
 
     def setProgress(self, value: float):
         """Set progress value (0.0 to 1.0)."""
@@ -118,6 +127,10 @@ class CircularProgress(QWidget):
             start_angle = 90 * 16
             span_angle = -int(self._progress * 360 * 16)
             painter.drawArc(rect, start_angle, span_angle)
+
+        # Compact mode draws only the ring; time/status live outside the widget
+        if self._compact:
+            return
 
         # Draw time text
         time_font = QFont(".AppleSystemUIFont", 24, QFont.Weight.Medium)

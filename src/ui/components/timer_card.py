@@ -20,11 +20,12 @@ class _ElidedLabel(QLabel):
     front of the name stays continuous and text is never clipped mid-character
     (the failure mode of guessing the available width up front)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, max_lines=2, align_left=False):
         super().__init__(parent)
         self._full_text = ""
         self._text_color = QColor("#1d1d1f")
-        self._max_lines = 2
+        self._max_lines = max_lines
+        self._align_left = align_left
 
     def setFullText(self, text: str):
         self._full_text = text or ""
@@ -80,7 +81,7 @@ class _ElidedLabel(QLabel):
         total_h = len(lines) * line_height
         y = (self.height() - total_h) / 2 + fm.ascent()
         for line in lines:
-            x = (width - fm.horizontalAdvance(line)) / 2
+            x = 0 if self._align_left else (width - fm.horizontalAdvance(line)) / 2
             painter.drawText(QPointF(x, y), line)
             y += line_height
 
@@ -96,12 +97,17 @@ class TimerCard(QFrame):
     notebook_requested = pyqtSignal(str)  # task_name
     name_edited = pyqtSignal(int, str)  # task_id, new_name
 
-    def __init__(self, task: Task, category: Category = None, parent=None):
+    def __init__(self, task: Task, category: Category = None, parent=None,
+                 view_mode: str = "card"):
         super().__init__(parent)
 
         self.task = task
         self.category = category
         self._dark_mode = False
+        self.view_mode = view_mode
+        # List-mode-only widgets (stay None in card mode)
+        self.time_label = None
+        self.status_label = None
 
         self._setup_ui()
         self._update_display()
@@ -111,23 +117,153 @@ class TimerCard(QFrame):
         self.customContextMenuRequested.connect(self._show_context_menu)
 
     def _setup_ui(self):
-        """Set up the card UI."""
+        """Set up the UI in the current view mode."""
         self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setObjectName("timerCard")
+        self._apply_frame_style()
 
-        # Card styling
-        self.setStyleSheet("""
-            QFrame#timerCard {
-                background-color: #ffffff;
-                border: 1px solid #e5e5ea;
+        if self.view_mode == "list":
+            self._setup_list_ui()
+        else:
+            self._setup_card_ui()
+
+    def _apply_frame_style(self):
+        """Apply the outer frame style for the current theme and view mode.
+
+        List rows have a fixed 64px height, so the frame must not add QSS
+        padding on top of the layout margins or the content gets squeezed.
+        """
+        if self._dark_mode:
+            bg, border, hover = "#2c2c2e", "#48484a", "#636366"
+        else:
+            bg, border, hover = "#ffffff", "#e5e5ea", "#d2d2d7"
+        padding = "0px" if self.view_mode == "list" else "16px"
+        self.setStyleSheet(f"""
+            QFrame#timerCard {{
+                background-color: {bg};
+                border: 1px solid {border};
                 border-radius: 12px;
-                padding: 16px;
+                padding: {padding};
+            }}
+            QFrame#timerCard:hover {{
+                border-color: {hover};
+            }}
+        """)
+
+    def _build_buttons(self):
+        """Create the toggle/stop buttons shared by both view modes."""
+        self.toggle_btn = QPushButton("开始")
+        self.toggle_btn.clicked.connect(self._on_toggle)
+        # Transparent border keeps the box model identical to the stop
+        # button (which has a real 1px border), so both render the same size.
+        self.toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007AFF;
+                color: white;
+                border: 1px solid transparent;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-size: 13px;
             }
-            QFrame#timerCard:hover {
-                border-color: #d2d2d7;
+            QPushButton:hover {
+                background-color: #0056b3;
             }
         """)
 
+        self.stop_btn = QPushButton("停止")
+        self.stop_btn.clicked.connect(self._on_stop)
+        self.stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f5f5f7;
+                color: #1d1d1f;
+                border: 1px solid #d2d2d7;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #e5e5ea;
+            }
+        """)
+
+    def _setup_list_ui(self):
+        """Compact one-row layout for the list view."""
+        layout = QHBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(14, 8, 14, 8)
+
+        # Small progress ring (clickable, no inner text)
+        self.progress = CircularProgress()
+        self.progress.setCompact(True)
+        self.progress.setFixedSize(40, 40)
+        self.progress.clicked.connect(self._on_toggle)
+        self.progress.setToolTip("点击暂停/继续")
+        layout.addWidget(self.progress)
+
+        # Name + category stacked, taking the remaining width
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+
+        self.name_label = _ElidedLabel(max_lines=1, align_left=True)
+        name_font = QFont()
+        name_font.setPixelSize(14)
+        name_font.setWeight(QFont.Weight.Medium)
+        self.name_label.setFont(name_font)
+        self.name_label.setFixedHeight(20)
+        self.name_label.setStyleSheet("QLabel { background: transparent; }")
+        text_col.addWidget(self.name_label)
+
+        # Inline name editor (hidden until the name is double-clicked)
+        self.name_edit = QLineEdit()
+        self.name_edit.setFixedHeight(24)
+        self.name_edit.hide()
+        self.name_edit.returnPressed.connect(self._commit_name_edit)
+        self.name_edit.editingFinished.connect(self._commit_name_edit)
+        self.name_edit.installEventFilter(self)
+        text_col.addWidget(self.name_edit)
+
+        self.category_label = QLabel()
+        self.category_label.setStyleSheet("""
+            QLabel {
+                font-size: 12px;
+                color: #6e6e73;
+                background: transparent;
+            }
+        """)
+        text_col.addWidget(self.category_label)
+        layout.addLayout(text_col, 1)
+
+        # Remaining time + status
+        self.time_label = QLabel("00:00")
+        self.time_label.setMinimumWidth(64)
+        self.time_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.time_label.setStyleSheet(
+            "QLabel { font-size: 18px; font-weight: 500;"
+            " color: #1d1d1f; background: transparent; }"
+        )
+        layout.addWidget(self.time_label)
+
+        self.status_label = QLabel()
+        self.status_label.setMinimumWidth(40)
+        self.status_label.setStyleSheet(
+            "QLabel { font-size: 11px; color: #6e6e73; background: transparent; }"
+        )
+        layout.addWidget(self.status_label)
+
+        self._build_buttons()
+        for btn in (self.toggle_btn, self.stop_btn):
+            btn.setFixedSize(64, 30)
+        layout.addWidget(self.toggle_btn)
+        layout.addWidget(self.stop_btn)
+
+        # Full-width row with a fixed height
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(64)
+
+    def _setup_card_ui(self):
+        """Vertical card layout for the grid view."""
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -176,43 +312,10 @@ class TimerCard(QFrame):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
 
-        self.toggle_btn = QPushButton("开始")
-        self.toggle_btn.setMinimumWidth(70)
-        self.toggle_btn.setFixedHeight(34)
-        self.toggle_btn.clicked.connect(self._on_toggle)
-        # Transparent border keeps the box model identical to the stop
-        # button (which has a real 1px border), so both render the same size.
-        self.toggle_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #007AFF;
-                color: white;
-                border: 1px solid transparent;
-                padding: 8px 16px;
-                border-radius: 6px;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #0056b3;
-            }
-        """)
-
-        self.stop_btn = QPushButton("停止")
-        self.stop_btn.setMinimumWidth(70)
-        self.stop_btn.setFixedHeight(34)
-        self.stop_btn.clicked.connect(self._on_stop)
-        self.stop_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f5f5f7;
-                color: #1d1d1f;
-                border: 1px solid #d2d2d7;
-                padding: 8px 16px;
-                border-radius: 6px;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #e5e5ea;
-            }
-        """)
+        self._build_buttons()
+        for btn in (self.toggle_btn, self.stop_btn):
+            btn.setMinimumWidth(70)
+            btn.setFixedHeight(34)
 
         # Equal stretch makes the layout give both buttons exactly the same
         # width, so they always render identical in size.
@@ -245,21 +348,27 @@ class TimerCard(QFrame):
         # Update status and button
         if self.task.status == TaskStatus.RUNNING:
             self.toggle_btn.setText("暂停")
-            self.progress.setStatusText("计时中")
+            status = "计时中"
             self.stop_btn.setEnabled(True)
         elif self.task.status == TaskStatus.PAUSED:
             self.toggle_btn.setText("继续")
-            self.progress.setStatusText("已暂停")
+            status = "已暂停"
             self.stop_btn.setEnabled(True)
         elif self.task.status == TaskStatus.COMPLETED:
             self.toggle_btn.setText("完成")
             self.toggle_btn.setEnabled(False)
-            self.progress.setStatusText("已完成")
+            status = "已完成"
             self.stop_btn.setEnabled(False)
         else:
             self.toggle_btn.setText("开始")
-            self.progress.setStatusText("")
+            status = ""
             self.stop_btn.setEnabled(False)
+        self.progress.setStatusText(status)
+
+        # List mode shows time/status next to the ring instead of inside it
+        if self.time_label is not None:
+            self.time_label.setText(self.task.format_remaining())
+            self.status_label.setText(status)
 
     def update_task(self, task: Task):
         """Update the task and refresh display."""
@@ -325,8 +434,12 @@ class TimerCard(QFrame):
         self.notebook_requested.emit(self.task.name)
 
     def _is_in_name_area(self, pos):
-        """Whether a point falls within the name label's row."""
+        """Whether a point falls within the name label's area."""
         geo = self.name_label.geometry()
+        if self.view_mode == "list":
+            # The row also holds time/buttons at the same height, so only
+            # the label's own rectangle counts.
+            return geo.contains(pos)
         return geo.top() <= pos.y() <= geo.bottom()
 
     def _start_name_edit(self):
@@ -410,18 +523,8 @@ class TimerCard(QFrame):
     def set_dark_mode(self, enabled: bool):
         """Toggle dark mode styling."""
         self._dark_mode = enabled
+        self._apply_frame_style()
         if enabled:
-            self.setStyleSheet("""
-                QFrame#timerCard {
-                    background-color: #2c2c2e;
-                    border: 1px solid #48484a;
-                    border-radius: 12px;
-                    padding: 16px;
-                }
-                QFrame#timerCard:hover {
-                    border-color: #636366;
-                }
-            """)
             self.name_label.setTextColor("#ffffff")
             self.category_label.setStyleSheet("""
                 QLabel {
@@ -433,18 +536,15 @@ class TimerCard(QFrame):
             self.progress.setTrackColor("#48484a")
             self.progress.setTextColor("#ffffff")
             self.progress.setStatusColor("#8e8e93")
+            if self.time_label is not None:
+                self.time_label.setStyleSheet(
+                    "QLabel { font-size: 18px; font-weight: 500;"
+                    " color: #ffffff; background: transparent; }"
+                )
+                self.status_label.setStyleSheet(
+                    "QLabel { font-size: 11px; color: #8e8e93; background: transparent; }"
+                )
         else:
-            self.setStyleSheet("""
-                QFrame#timerCard {
-                    background-color: #ffffff;
-                    border: 1px solid #e5e5ea;
-                    border-radius: 12px;
-                    padding: 16px;
-                }
-                QFrame#timerCard:hover {
-                    border-color: #d2d2d7;
-                }
-            """)
             self.name_label.setTextColor("#1d1d1f")
             self.category_label.setStyleSheet("""
                 QLabel {
@@ -456,6 +556,14 @@ class TimerCard(QFrame):
             self.progress.setTrackColor("#e5e5ea")
             self.progress.setTextColor("#1d1d1f")
             self.progress.setStatusColor("#6e6e73")
+            if self.time_label is not None:
+                self.time_label.setStyleSheet(
+                    "QLabel { font-size: 18px; font-weight: 500;"
+                    " color: #1d1d1f; background: transparent; }"
+                )
+                self.status_label.setStyleSheet(
+                    "QLabel { font-size: 11px; color: #6e6e73; background: transparent; }"
+                )
 
 
 class EditTimerDialog(QDialog):

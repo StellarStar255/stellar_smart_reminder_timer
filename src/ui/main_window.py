@@ -88,6 +88,10 @@ class MainWindow(QMainWindow):
 
         self.db = db
         self._dark_mode = db.get_setting("dark_mode", "0") == "1"
+        # Timer area view mode: "card" (horizontal grid) or "list" (rows)
+        self._view_mode = db.get_setting("timer_view_mode", "card")
+        if self._view_mode not in ("card", "list"):
+            self._view_mode = "card"
 
         # Initialize repositories
         self.category_repo = CategoryRepository(db)
@@ -250,6 +254,13 @@ class MainWindow(QMainWindow):
         self.sort_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
         header_layout.addWidget(self.sort_mode_btn)
 
+        # Timer view-mode toggle (card grid <-> compact list)
+        self.view_mode_btn = QPushButton()
+        self.view_mode_btn.setFixedHeight(32)
+        self.view_mode_btn.clicked.connect(self._toggle_view_mode)
+        self.view_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
+        header_layout.addWidget(self.view_mode_btn)
+
         # Save-config button (exports presets/categories/settings to JSON)
         self.save_config_btn = QPushButton("💾 保存配置")
         self.save_config_btn.setFixedHeight(32)
@@ -377,6 +388,22 @@ class MainWindow(QMainWindow):
         self.cards_scroll.setWidget(self.timer_container)
         scroll_layout.addWidget(self.cards_scroll)
 
+        # List-view container: vertical stack of compact full-width rows,
+        # shown instead of the horizontal card row in list mode.
+        self.list_container = QWidget()
+        self.list_container.setAcceptDrops(True)
+        self.list_container.installEventFilter(self)
+        self.list_layout = QVBoxLayout(self.list_container)
+        self.list_layout.setSpacing(8)
+        self.list_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.addWidget(self.list_container)
+
+        # Drop indicator for list-mode drag-reorder (horizontal line)
+        self._list_drop_indicator = QWidget(self.list_container)
+        self._list_drop_indicator.setFixedHeight(3)
+        self._list_drop_indicator.setStyleSheet("background-color: #007AFF; border-radius: 1px;")
+        self._list_drop_indicator.hide()
+
         # Stats dashboard (below timer cards, scrollable)
         self.stats_dashboard = StatsDashboard(db=self.db)
         scroll_layout.addWidget(self.stats_dashboard)
@@ -387,6 +414,9 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(main_scroll, 1)
 
         main_layout.addWidget(content, 1)
+
+        # Show the container matching the saved view mode
+        self._apply_view_mode()
 
         # Apply initial theme
         self._apply_theme()
@@ -556,10 +586,68 @@ class MainWindow(QMainWindow):
         self.preset_manager.reorder(ordered_ids)
         self._refresh_presets_filtered()
 
+    def _active_cards_layout(self):
+        """The layout currently holding the timer cards."""
+        return self.list_layout if self._view_mode == "list" else self.timer_layout
+
+    def _apply_view_mode(self):
+        """Sync container visibility, empty-label parent and button label."""
+        is_list = self._view_mode == "list"
+        self.cards_scroll.setVisible(not is_list)
+        self.list_container.setVisible(is_list)
+
+        # Keep the empty placeholder inside whichever container is visible
+        if is_list:
+            self.timer_layout.removeWidget(self.empty_label)
+            self.list_layout.insertWidget(0, self.empty_label)
+        else:
+            self.list_layout.removeWidget(self.empty_label)
+            self.timer_layout.insertWidget(0, self.empty_label)
+
+        if is_list:
+            self.view_mode_btn.setText("▦ 卡片视图")
+            self.view_mode_btn.setToolTip("当前为列表视图；点击切换为卡片视图")
+        else:
+            self.view_mode_btn.setText("☰ 列表视图")
+            self.view_mode_btn.setToolTip("当前为卡片视图；点击切换为列表视图，方便整体浏览")
+
+    def _toggle_view_mode(self):
+        """Switch the timer area between card grid and compact list."""
+        self._view_mode = "list" if self._view_mode == "card" else "card"
+        self.db.set_setting("timer_view_mode", self._view_mode)
+        self._apply_view_mode()
+        self._rebuild_timer_cards()
+
+    def _rebuild_timer_cards(self):
+        """Recreate all timer cards in the current view mode, keeping order."""
+        old_cards = []
+        for layout in (self.timer_layout, self.list_layout):
+            for i in range(layout.count()):
+                w = layout.itemAt(i).widget()
+                if isinstance(w, TimerCard):
+                    old_cards.append(w)
+
+        tasks = [card.task for card in old_cards]
+        self._timer_cards.clear()
+        for card in old_cards:
+            card.setParent(None)
+            card.deleteLater()
+
+        for task in tasks:
+            self._create_timer_card(task)
+
+        # Re-apply the current category filter to the fresh cards
+        if self._selected_category_id is not None:
+            for task_id, card in self._timer_cards.items():
+                task = self.timer_engine.get_task(task_id)
+                card.setVisible(
+                    task is not None and task.category_id == self._selected_category_id
+                )
+
     def _create_timer_card(self, task: Task):
         """Create a timer card for a task."""
         category = self._categories.get(task.category_id)
-        card = TimerCard(task, category)
+        card = TimerCard(task, category, view_mode=self._view_mode)
         card.toggle_clicked.connect(self._on_card_toggle)
         card.stop_clicked.connect(self._on_card_stop)
         card.edit_requested.connect(self._on_card_edit)
@@ -567,8 +655,11 @@ class MainWindow(QMainWindow):
         card.name_edited.connect(self._on_card_name_edited)
         card.set_dark_mode(self._dark_mode)
 
-        # Add to layout before stretch
-        self.timer_layout.insertWidget(self.timer_layout.count() - 1, card)
+        if self._view_mode == "list":
+            self.list_layout.addWidget(card)
+        else:
+            # Add to layout before stretch
+            self.timer_layout.insertWidget(self.timer_layout.count() - 1, card)
         self._timer_cards[task.id] = card
 
         # Hide empty label
@@ -579,7 +670,7 @@ class MainWindow(QMainWindow):
         """Remove a timer card."""
         if task_id in self._timer_cards:
             card = self._timer_cards.pop(task_id)
-            self.timer_layout.removeWidget(card)
+            self._active_cards_layout().removeWidget(card)
             card.deleteLater()
 
         # Show empty label if no cards
@@ -864,6 +955,11 @@ class MainWindow(QMainWindow):
         mode = settings.get('chart_mode')
         if mode in ('bar', 'pie'):
             self.stats_dashboard.set_chart_mode(mode)
+        view = settings.get('timer_view_mode')
+        if view in ('card', 'list') and view != self._view_mode:
+            self._view_mode = view
+            self._apply_view_mode()
+            self._rebuild_timer_cards()
         # Chart star ratings / hidden tasks were written to settings above
         self.stats_dashboard._load_star_ratings()
         self.stats_dashboard._load_hidden_tasks()
@@ -1287,6 +1383,7 @@ class MainWindow(QMainWindow):
         self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
         self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
         self.sort_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
+        self.view_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
 
         # Update components
         self.sidebar.set_dark_mode(self._dark_mode)
@@ -1329,8 +1426,8 @@ class MainWindow(QMainWindow):
     # --- Timer card drag-reorder ---
 
     def eventFilter(self, obj, event):
-        """Handle drag/drop events on timer_container."""
-        if obj is not self.timer_container:
+        """Handle drag/drop events on the timer card containers."""
+        if obj is not self.timer_container and obj is not self.list_container:
             return super().eventFilter(obj, event)
 
         etype = event.type()
@@ -1343,46 +1440,57 @@ class MainWindow(QMainWindow):
         elif etype == QEvent.Type.DragMove:
             if event.mimeData().hasFormat("application/x-timer-card-id"):
                 event.acceptProposedAction()
-                drop_idx = self._calc_card_drop_index(event.position().x())
+                drop_idx = self._calc_card_drop_index(event.position())
                 self._show_card_drop_indicator(drop_idx)
                 return True
 
         elif etype == QEvent.Type.Drop:
             self._card_drop_indicator.hide()
+            self._list_drop_indicator.hide()
             if event.mimeData().hasFormat("application/x-timer-card-id"):
                 event.acceptProposedAction()
                 task_id = int(event.mimeData().data("application/x-timer-card-id").data().decode())
-                drop_idx = self._calc_card_drop_index(event.position().x())
+                drop_idx = self._calc_card_drop_index(event.position())
                 self._handle_card_drop(task_id, drop_idx)
                 return True
 
         elif etype == QEvent.Type.DragLeave:
             self._card_drop_indicator.hide()
+            self._list_drop_indicator.hide()
             return True
 
         return super().eventFilter(obj, event)
 
-    def _calc_card_drop_index(self, local_x: float) -> int:
-        """Calculate card insertion index from x position."""
-        count = self.timer_layout.count()
+    def _calc_card_drop_index(self, pos) -> int:
+        """Calculate card insertion index from the drag position.
+
+        Card mode compares x against card centers; list mode compares y
+        against row centers.
+        """
+        layout = self._active_cards_layout()
+        vertical = self._view_mode == "list"
+        coord = pos.y() if vertical else pos.x()
+        count = layout.count()
         for i in range(count):
-            item = self.timer_layout.itemAt(i)
-            w = item.widget()
+            w = layout.itemAt(i).widget()
             if w is None or not isinstance(w, TimerCard):
                 continue
-            center = w.x() + w.width() / 2
-            if local_x < center:
+            center = (w.y() + w.height() / 2) if vertical else (w.x() + w.width() / 2)
+            if coord < center:
                 return i
         # Count only TimerCard widgets for the "after last" index
         last_card_idx = 0
         for i in range(count):
-            item = self.timer_layout.itemAt(i)
+            item = layout.itemAt(i)
             if item.widget() and isinstance(item.widget(), TimerCard):
                 last_card_idx = i + 1
         return last_card_idx
 
     def _show_card_drop_indicator(self, drop_idx: int):
         """Show drop indicator at the given position."""
+        if self._view_mode == "list":
+            self._show_list_drop_indicator(drop_idx)
+            return
         count = self.timer_layout.count()
         # Find the widget at drop_idx or the last card
         if drop_idx < count:
@@ -1407,15 +1515,38 @@ class MainWindow(QMainWindow):
         self._card_drop_indicator.show()
         self._card_drop_indicator.raise_()
 
+    def _show_list_drop_indicator(self, drop_idx: int):
+        """Horizontal drop line between list rows."""
+        layout = self.list_layout
+        count = layout.count()
+        y = 0
+        if drop_idx < count:
+            item = layout.itemAt(drop_idx)
+            if item and item.widget():
+                y = item.widget().y() - 5
+        else:
+            for i in range(count - 1, -1, -1):
+                w = layout.itemAt(i).widget()
+                if isinstance(w, TimerCard):
+                    y = w.y() + w.height() + 2
+                    break
+
+        self._list_drop_indicator.setFixedWidth(self.list_container.width())
+        self._list_drop_indicator.move(0, max(0, int(y)))
+        self._list_drop_indicator.show()
+        self._list_drop_indicator.raise_()
+
     def _handle_card_drop(self, task_id: int, drop_idx: int):
         """Move the timer card to the new position and persist order."""
         if task_id not in self._timer_cards:
             return
 
+        layout = self._active_cards_layout()
+
         # Find source index
         src_idx = None
-        for i in range(self.timer_layout.count()):
-            item = self.timer_layout.itemAt(i)
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
             w = item.widget()
             if isinstance(w, TimerCard) and w.task.id == task_id:
                 src_idx = i
@@ -1425,19 +1556,19 @@ class MainWindow(QMainWindow):
             return
 
         # Remove from layout and re-insert
-        item = self.timer_layout.takeAt(src_idx)
+        item = layout.takeAt(src_idx)
         widget = item.widget()
 
         # Adjust index after removal
         if src_idx < drop_idx:
             drop_idx -= 1
 
-        self.timer_layout.insertWidget(drop_idx, widget)
+        layout.insertWidget(drop_idx, widget)
 
         # Persist new order to database
         order_mapping = []
-        for i in range(self.timer_layout.count()):
-            item = self.timer_layout.itemAt(i)
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
             w = item.widget()
             if isinstance(w, TimerCard):
                 order_mapping.append((i, w.task.id))
@@ -1452,10 +1583,11 @@ class MainWindow(QMainWindow):
         if task_id not in self._timer_cards:
             return
 
+        layout = self._active_cards_layout()
         src_idx = None
         first_card_idx = None
-        for i in range(self.timer_layout.count()):
-            w = self.timer_layout.itemAt(i).widget()
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
             if isinstance(w, TimerCard):
                 if first_card_idx is None:
                     first_card_idx = i
@@ -1467,18 +1599,21 @@ class MainWindow(QMainWindow):
 
         # src_idx > first_card_idx here, so removing it doesn't shift the
         # front position; re-insert the card at the front.
-        item = self.timer_layout.takeAt(src_idx)
-        self.timer_layout.insertWidget(first_card_idx, item.widget())
+        item = layout.takeAt(src_idx)
+        layout.insertWidget(first_card_idx, item.widget())
 
         order_mapping = []
-        for i in range(self.timer_layout.count()):
-            w = self.timer_layout.itemAt(i).widget()
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
             if isinstance(w, TimerCard):
                 order_mapping.append((len(order_mapping), w.task.id))
         self.task_repo.update_display_orders(order_mapping)
 
         # Scroll back to the start so the just-activated card is visible.
-        self.cards_scroll.horizontalScrollBar().setValue(0)
+        if self._view_mode == "card":
+            self.cards_scroll.horizontalScrollBar().setValue(0)
+        else:
+            self._main_scroll.verticalScrollBar().setValue(0)
 
     def closeEvent(self, event):
         """Handle window close - minimize to tray instead of quitting."""
