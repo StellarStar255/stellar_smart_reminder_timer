@@ -148,6 +148,44 @@ class Database:
         except Exception:
             pass  # Column already exists
 
+        self._backfill_stopped_task_history()
+
+    def _backfill_stopped_task_history(self):
+        """Backfill history for manually-stopped tasks.
+
+        Stops recorded before task_history captured them left their focus
+        time invisible in every date-ranged stat. Insert those tasks into
+        task_history once; NOT EXISTS keeps this idempotent across restarts.
+        """
+        from datetime import date
+        cursor = self.connection.execute(
+            """SELECT id, category_id, duration_seconds, elapsed_seconds,
+                      COALESCE(completed_at, started_at, created_at) AS ended_at
+               FROM tasks t
+               WHERE status = 'cancelled' AND elapsed_seconds > 0
+                 AND NOT EXISTS (SELECT 1 FROM task_history h WHERE h.task_id = t.id)"""
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            return
+        for row in rows:
+            day = (row['ended_at'] or '')[:10] or date.today().isoformat()
+            self.connection.execute(
+                """INSERT INTO task_history (task_id, category_id, duration_seconds,
+                   elapsed_seconds, completed_at, date)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (row['id'], row['category_id'], row['duration_seconds'],
+                 row['elapsed_seconds'], row['ended_at'], day)
+            )
+            self.connection.execute(
+                """INSERT INTO daily_stats (date, total_tasks, completed_tasks, total_focus_seconds)
+                   VALUES (?, 0, 0, ?)
+                   ON CONFLICT(date) DO UPDATE SET
+                   total_focus_seconds = total_focus_seconds + ?""",
+                (day, row['elapsed_seconds'], row['elapsed_seconds'])
+            )
+        self.connection.commit()
+
     def _seed_default_data(self):
         """Seed default categories and presets if empty."""
         cursor = self.connection.cursor()

@@ -136,6 +136,34 @@ class TaskRepository:
         )
         self.db.commit()
 
+    def record_stop(self, task: Task):
+        """Record a manually-stopped task's focus time in history.
+
+        Unlike record_completion, the elapsed time counts toward history and
+        daily focus stats, but the completed-task counter is left untouched
+        (the task wasn't finished).
+        """
+        if task.elapsed_seconds <= 0:
+            return
+        today = date.today().isoformat()
+        ended_at = (task.completed_at or datetime.now()).isoformat()
+        self.db.execute(
+            """INSERT INTO task_history (task_id, category_id, duration_seconds,
+               elapsed_seconds, completed_at, date)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (task.id, task.category_id, task.duration_seconds,
+             task.elapsed_seconds, ended_at, today)
+        )
+
+        self.db.execute(
+            """INSERT INTO daily_stats (date, total_tasks, completed_tasks, total_focus_seconds)
+               VALUES (?, 0, 0, ?)
+               ON CONFLICT(date) DO UPDATE SET
+               total_focus_seconds = total_focus_seconds + ?""",
+            (today, task.elapsed_seconds, task.elapsed_seconds)
+        )
+        self.db.commit()
+
     def update_display_orders(self, order_mapping: list):
         """Batch update display_order for multiple tasks.
 

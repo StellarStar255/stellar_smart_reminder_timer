@@ -84,12 +84,19 @@ class TaskManager(QObject):
             self.task_updated.emit(task)
 
     def stop_task(self, task_id: int):
-        """Stop a task timer."""
-        self.timer_engine.stop(task_id)
+        """Stop a task timer, recording accumulated focus time in history."""
         task = self.timer_engine.get_task(task_id)
-        if task:
-            self.task_repo.update(task)
-            self.task_updated.emit(task)
+        was_active = task is not None and task.is_active
+        self.timer_engine.stop(task_id)
+        if not task:
+            return
+        # Only a stop that actually cancelled an active timer gets recorded,
+        # so repeated stops can't double-count the elapsed time.
+        if was_active and task.status == TaskStatus.CANCELLED:
+            task.completed_at = datetime.now()
+            self.task_repo.record_stop(task)
+        self.task_repo.update(task)
+        self.task_updated.emit(task)
 
     def toggle_task(self, task_id: int):
         """Toggle task between running and paused."""
