@@ -23,6 +23,7 @@ from src.ui.components.timer_card import TimerCard, EditTimerDialog
 from src.ui.components.preset_bar import PresetBar, CustomTimerDialog, EditPresetDialog
 from src.ui.components.preset_manager_dialog import PresetManagerDialog
 from src.ui.components.category_sidebar import CategorySidebar
+from src.ui.components.flow_layout import FlowLayout
 from src.ui.components.stats_dashboard import StatsDashboard
 from src.ui.components.task_notebook_dialog import TaskNotebookDialog
 from src.ui.styles import LIGHT_THEME, DARK_THEME
@@ -42,6 +43,10 @@ def _create_objc_delegate_class():
         def showWindow_(self, sender):
             if self._main_window:
                 self._main_window._show_window()
+
+        def checkUpdates_(self, sender):
+            if self._main_window:
+                self._main_window._manual_update_check()
 
         def quitApp_(self, sender):
             QApplication.quit()
@@ -138,12 +143,31 @@ class MainWindow(QMainWindow):
         self._update_checker = None
         QTimer.singleShot(3000, self._check_for_updates)
 
-    def _check_for_updates(self):
-        """Kick off the background update check (silent when up to date)."""
+    def _check_for_updates(self, manual: bool = False):
+        """Check GitHub Releases; manual checks also report "no update"."""
         from src.core.update_checker import UpdateChecker
         self._update_checker = UpdateChecker(self)
         self._update_checker.update_available.connect(self._on_update_available)
+        if manual:
+            self._update_checker.up_to_date.connect(self._on_up_to_date)
+            self._update_checker.check_failed.connect(self._on_update_check_failed)
         self._update_checker.start()
+
+    def _manual_update_check(self):
+        """Tray-menu entry point: bring the window up, then check."""
+        self._show_window()
+        self._check_for_updates(manual=True)
+
+    def _on_up_to_date(self, remote_tag: str):
+        from src.version import __version__
+        QMessageBox.information(
+            self, "检查更新",
+            f"当前已是最新版本 v{__version__}，无需升级。")
+
+    def _on_update_check_failed(self, message: str):
+        QMessageBox.warning(
+            self, "检查更新",
+            f"检查更新失败：{message}\n\n请确认网络后重试。")
 
     def _on_update_available(self, version: str, notes: str,
                              asset_name: str, asset_url: str):
@@ -227,6 +251,11 @@ class MainWindow(QMainWindow):
         self._clock_timer.timeout.connect(self._update_clock)
         self._clock_timer.start(1000)
 
+        # Toolbar row below the title: FlowLayout wraps the controls onto
+        # extra lines when the window is narrow, instead of letting a
+        # QHBoxLayout squeeze them into overlapping slivers.
+        toolbar_flow = FlowLayout(hspacing=8, vspacing=8)
+
         # Preset search input
         self.preset_search_input = QLineEdit()
         self.preset_search_input.setPlaceholderText("🔍 搜索预设...")
@@ -247,7 +276,7 @@ class MainWindow(QMainWindow):
                 background-color: #ffffff;
             }
         """)
-        header_layout.addWidget(self.preset_search_input)
+        toolbar_flow.addWidget(self.preset_search_input)
 
         # Preset management button (opens list-style manager dialog)
         self.manage_btn = QPushButton("🗂 管理预设")
@@ -268,21 +297,21 @@ class MainWindow(QMainWindow):
                 color: #1d1d1f;
             }
         """)
-        header_layout.addWidget(self.manage_btn)
+        toolbar_flow.addWidget(self.manage_btn)
 
         # Preset sort-mode toggle (smart auto-sort <-> manual drag order)
         self.sort_mode_btn = QPushButton()
         self.sort_mode_btn.setFixedHeight(32)
         self.sort_mode_btn.clicked.connect(self._toggle_sort_mode)
         self.sort_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
-        header_layout.addWidget(self.sort_mode_btn)
+        toolbar_flow.addWidget(self.sort_mode_btn)
 
         # Timer view-mode toggle (card grid <-> compact list)
         self.view_mode_btn = QPushButton()
         self.view_mode_btn.setFixedHeight(32)
         self.view_mode_btn.clicked.connect(self._toggle_view_mode)
         self.view_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
-        header_layout.addWidget(self.view_mode_btn)
+        toolbar_flow.addWidget(self.view_mode_btn)
 
         # Save-config button (exports presets/categories/settings to JSON)
         self.save_config_btn = QPushButton("💾 保存配置")
@@ -290,7 +319,7 @@ class MainWindow(QMainWindow):
         self.save_config_btn.setToolTip("把所有预设、分类和设置导出为 JSON 备份文件")
         self.save_config_btn.clicked.connect(self._on_save_config)
         self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
-        header_layout.addWidget(self.save_config_btn)
+        toolbar_flow.addWidget(self.save_config_btn)
 
         # Import/export menu button (file-based config transfer).
         # Shown manually on press (not via setMenu) so it pops immediately;
@@ -312,7 +341,7 @@ class MainWindow(QMainWindow):
         # Pre-polish so the first open doesn't pay style computation cost
         self._transfer_menu.ensurePolished()
         self._transfer_menu.sizeHint()
-        header_layout.addWidget(self.transfer_btn)
+        toolbar_flow.addWidget(self.transfer_btn)
 
         header_layout.addStretch()
 
@@ -359,6 +388,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.theme_btn)
 
         content_layout.addLayout(header_layout)
+        content_layout.addLayout(toolbar_flow)
 
         # Preset bar
         self.preset_bar = PresetBar()
@@ -502,6 +532,10 @@ class MainWindow(QMainWindow):
         show_action = QAction("显示窗口", menu)
         show_action.triggered.connect(self._show_window)
         menu.addAction(show_action)
+        from src.version import __version__
+        update_action = QAction(f"检查更新…（当前 v{__version__}）", menu)
+        update_action.triggered.connect(self._manual_update_check)
+        menu.addAction(update_action)
         menu.addSeparator()
         quit_action = QAction("退出", menu)
         quit_action.triggered.connect(QApplication.quit)
@@ -571,6 +605,12 @@ class MainWindow(QMainWindow):
         show_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("显示窗口", "showWindow:", "")
         show_item.setTarget_(self._menu_delegate)
         ns_menu.addItem_(show_item)
+
+        from src.version import __version__
+        update_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            f"检查更新…（当前 v{__version__}）", "checkUpdates:", "")
+        update_item.setTarget_(self._menu_delegate)
+        ns_menu.addItem_(update_item)
 
         ns_menu.addItem_(NSMenuItem.separatorItem())
 

@@ -62,24 +62,34 @@ def pick_asset(assets: list) -> dict | None:
 
 
 class UpdateChecker(QThread):
-    """Background check for a newer GitHub release."""
+    """Background check for a newer GitHub release.
+
+    The startup auto-check only connects update_available, so being
+    up to date (or offline) stays silent; a manual check from the tray
+    menu also connects up_to_date / check_failed for feedback.
+    """
 
     # version, release notes, asset name, asset download url
     update_available = pyqtSignal(str, str, str, str)
+    up_to_date = pyqtSignal(str)     # latest remote tag
+    check_failed = pyqtSignal(str)   # error message
 
     def run(self):
         try:
             req = urllib.request.Request(LATEST_API_URL, headers=_REQUEST_HEADERS)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 release = json.load(resp)
-        except Exception:
-            return  # offline / rate-limited / no releases yet — stay silent
+        except Exception as exc:
+            self.check_failed.emit(str(exc))
+            return
 
         tag = release.get("tag_name", "")
         if release.get("draft") or release.get("prerelease") or not is_newer(tag):
+            self.up_to_date.emit(tag or f"v{__version__}")
             return
         asset = pick_asset(release.get("assets"))
         if not asset:
+            self.check_failed.emit("最新 Release 里没有当前平台的安装包")
             return
         self.update_available.emit(
             tag.lstrip("v"),
