@@ -346,7 +346,8 @@ class MainWindow(QMainWindow):
         task_search_row.setSpacing(10)
 
         self.task_search_input = QLineEdit()
-        self.task_search_input.setPlaceholderText("🔍 搜索正在进行的任务…")
+        self.task_search_input.setPlaceholderText("🔍 搜索任务，空格分隔多个关键词…")
+        self.task_search_input.setToolTip("空格分隔多个关键词，任务名需同时包含所有关键词")
         self.task_search_input.setClearButtonEnabled(True)
         self.task_search_input.setFixedHeight(34)
         self.task_search_input.setFixedWidth(300)
@@ -676,8 +677,12 @@ class MainWindow(QMainWindow):
         self._apply_task_filters()
 
     def _apply_task_filters(self, *_):
-        """Show/hide timer cards by the category filter and search query."""
-        query = self.task_search_input.text().strip().lower()
+        """Show/hide timer cards by the category filter and search query.
+
+        The query is split on whitespace into keywords combined with AND:
+        a card matches only if its name contains every keyword.
+        """
+        keywords = self.task_search_input.text().lower().split()
         visible = 0
         for task_id, card in self._timer_cards.items():
             task = self.timer_engine.get_task(task_id)
@@ -687,14 +692,14 @@ class MainWindow(QMainWindow):
                     task is not None
                     and task.category_id == self._selected_category_id
                 )
-            if matches and query:
-                name = (task.name if task else card.task.name) or ""
-                matches = query in name.lower()
+            if matches and keywords:
+                name = ((task.name if task else card.task.name) or "").lower()
+                matches = all(kw in name for kw in keywords)
             card.setVisible(matches)
             if matches:
                 visible += 1
 
-        self.task_search_count.setText(f"{visible} 个匹配" if query else "")
+        self.task_search_count.setText(f"{visible} 个匹配" if keywords else "")
 
         # Placeholder: no timers at all vs. everything filtered out
         if not self._timer_cards:
