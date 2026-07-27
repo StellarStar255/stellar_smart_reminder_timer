@@ -18,6 +18,7 @@ Flow:
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,21 @@ _REQUEST_HEADERS = {
     "Accept": "application/vnd.github+json",
     "User-Agent": f"{APP_NAME}/{__version__}",
 }
+
+
+def _open_url(request, timeout: int):
+    """urlopen with certifi's CA bundle.
+
+    PyInstaller-frozen Python has no access to the system certificate
+    store, so plain urlopen fails every HTTPS request with
+    CERTIFICATE_VERIFY_FAILED. certifi ships the CAs inside the bundle.
+    """
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        ctx = ssl.create_default_context()
+    return urllib.request.urlopen(request, timeout=timeout, context=ctx)
 
 
 def _parse_version(text: str):
@@ -77,7 +93,7 @@ class UpdateChecker(QThread):
     def run(self):
         try:
             req = urllib.request.Request(LATEST_API_URL, headers=_REQUEST_HEADERS)
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with _open_url(req, timeout=15) as resp:
                 release = json.load(resp)
         except Exception as exc:
             self.check_failed.emit(str(exc))
@@ -116,7 +132,7 @@ class UpdateDownloader(QThread):
             target_dir = tempfile.mkdtemp(prefix="stellarpulse_update_")
             target = os.path.join(target_dir, self._filename)
             req = urllib.request.Request(self._url, headers=_REQUEST_HEADERS)
-            with urllib.request.urlopen(req, timeout=30) as resp, \
+            with _open_url(req, timeout=30) as resp, \
                     open(target, "wb") as out:
                 total = int(resp.headers.get("Content-Length") or 0)
                 done = 0
