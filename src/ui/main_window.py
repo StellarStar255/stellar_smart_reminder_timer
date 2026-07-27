@@ -341,6 +341,41 @@ class MainWindow(QMainWindow):
         self.preset_bar = PresetBar()
         content_layout.addWidget(self.preset_bar)
 
+        # Task search row (filters the timer cards below by name)
+        task_search_row = QHBoxLayout()
+        task_search_row.setSpacing(10)
+
+        self.task_search_input = QLineEdit()
+        self.task_search_input.setPlaceholderText("🔍 搜索正在进行的任务…")
+        self.task_search_input.setClearButtonEnabled(True)
+        self.task_search_input.setFixedHeight(34)
+        self.task_search_input.setFixedWidth(300)
+        self.task_search_input.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #d2d2d7;
+                border-radius: 17px;
+                padding: 0 14px;
+                font-size: 13px;
+                background-color: #f5f5f7;
+                color: #1d1d1f;
+            }
+            QLineEdit:focus {
+                border-color: #007AFF;
+                background-color: #ffffff;
+            }
+        """)
+        task_search_row.addWidget(self.task_search_input)
+
+        # Live match count shown only while a query is active
+        self.task_search_count = QLabel("")
+        self.task_search_count.setStyleSheet(
+            "QLabel { color: #6e6e73; font-size: 12px; }"
+        )
+        task_search_row.addWidget(self.task_search_count)
+        task_search_row.addStretch()
+
+        content_layout.addLayout(task_search_row)
+
         # Main scrollable content area (timer cards at top, stats below);
         # scrolls vertically only — horizontal overflow is handled by the
         # dedicated timer-card scroll area so the stats stay fully visible.
@@ -495,6 +530,7 @@ class MainWindow(QMainWindow):
         self.preset_bar.preset_edit_requested.connect(self._on_preset_edit_requested)
         self.preset_bar.presets_reordered.connect(self._on_presets_reordered)
         self.preset_search_input.textChanged.connect(self.preset_bar._on_search_changed)
+        self.task_search_input.textChanged.connect(self._apply_task_filters)
 
         # Stats dashboard
         self.stats_dashboard.period_changed.connect(self._on_period_changed)
@@ -636,13 +672,39 @@ class MainWindow(QMainWindow):
         for task in tasks:
             self._create_timer_card(task)
 
-        # Re-apply the current category filter to the fresh cards
-        if self._selected_category_id is not None:
-            for task_id, card in self._timer_cards.items():
-                task = self.timer_engine.get_task(task_id)
-                card.setVisible(
-                    task is not None and task.category_id == self._selected_category_id
+        # Re-apply the current category/search filters to the fresh cards
+        self._apply_task_filters()
+
+    def _apply_task_filters(self, *_):
+        """Show/hide timer cards by the category filter and search query."""
+        query = self.task_search_input.text().strip().lower()
+        visible = 0
+        for task_id, card in self._timer_cards.items():
+            task = self.timer_engine.get_task(task_id)
+            matches = True
+            if self._selected_category_id is not None:
+                matches = (
+                    task is not None
+                    and task.category_id == self._selected_category_id
                 )
+            if matches and query:
+                name = (task.name if task else card.task.name) or ""
+                matches = query in name.lower()
+            card.setVisible(matches)
+            if matches:
+                visible += 1
+
+        self.task_search_count.setText(f"{visible} 个匹配" if query else "")
+
+        # Placeholder: no timers at all vs. everything filtered out
+        if not self._timer_cards:
+            self.empty_label.setText("点击上方预设或自定义按钮开始计时")
+            self.empty_label.show()
+        elif visible == 0:
+            self.empty_label.setText("没有匹配的任务")
+            self.empty_label.show()
+        else:
+            self.empty_label.hide()
 
     def _create_timer_card(self, task: Task):
         """Create a timer card for a task."""
@@ -662,8 +724,8 @@ class MainWindow(QMainWindow):
             self.timer_layout.insertWidget(self.timer_layout.count() - 1, card)
         self._timer_cards[task.id] = card
 
-        # Hide empty label
-        self.empty_label.hide()
+        # Sync visibility (empty label, active search/category filters)
+        self._apply_task_filters()
         self.cards_scroll.updateGeometry()
 
     def _remove_timer_card(self, task_id: int):
@@ -673,9 +735,7 @@ class MainWindow(QMainWindow):
             self._active_cards_layout().removeWidget(card)
             card.deleteLater()
 
-        # Show empty label if no cards
-        if not self._timer_cards:
-            self.empty_label.show()
+        self._apply_task_filters()
         self.cards_scroll.updateGeometry()
 
     def _update_stats(self):
@@ -1028,6 +1088,8 @@ class MainWindow(QMainWindow):
             return
         task.name = new_name
         self.task_repo.update(task)
+        # A rename can change whether the card matches the search query
+        self._apply_task_filters()
 
     def _on_period_changed(self, days: int):
         """Handle task distribution period change."""
@@ -1050,13 +1112,8 @@ class MainWindow(QMainWindow):
         """Handle category filter selection."""
         self._selected_category_id = category.id if category else None
 
-        # Filter timer cards
-        for task_id, card in self._timer_cards.items():
-            if self._selected_category_id is None:
-                card.show()
-            else:
-                task = self.timer_engine.get_task(task_id)
-                card.setVisible(task is not None and task.category_id == self._selected_category_id)
+        # Filter timer cards (combined with the search query)
+        self._apply_task_filters()
 
         # Filter presets
         if self._selected_category_id is None:
@@ -1404,6 +1461,23 @@ class MainWindow(QMainWindow):
                     background-color: #3a3a3c;
                 }
             """)
+            self.task_search_input.setStyleSheet("""
+                QLineEdit {
+                    border: 1px solid #48484a;
+                    border-radius: 17px;
+                    padding: 0 14px;
+                    font-size: 13px;
+                    background-color: #2c2c2e;
+                    color: #ffffff;
+                }
+                QLineEdit:focus {
+                    border-color: #0a84ff;
+                    background-color: #3a3a3c;
+                }
+            """)
+            self.task_search_count.setStyleSheet(
+                "QLabel { color: #98989d; font-size: 12px; }"
+            )
         else:
             self.preset_search_input.setStyleSheet("""
                 QLineEdit {
@@ -1419,6 +1493,23 @@ class MainWindow(QMainWindow):
                     background-color: #ffffff;
                 }
             """)
+            self.task_search_input.setStyleSheet("""
+                QLineEdit {
+                    border: 1px solid #d2d2d7;
+                    border-radius: 17px;
+                    padding: 0 14px;
+                    font-size: 13px;
+                    background-color: #f5f5f7;
+                    color: #1d1d1f;
+                }
+                QLineEdit:focus {
+                    border-color: #007AFF;
+                    background-color: #ffffff;
+                }
+            """)
+            self.task_search_count.setStyleSheet(
+                "QLabel { color: #6e6e73; font-size: 12px; }"
+            )
 
         for card in self._timer_cards.values():
             card.set_dark_mode(self._dark_mode)
