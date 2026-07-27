@@ -69,3 +69,6 @@ GenerateTraceFile.py
 !assets/*
 
 StellarPulseReminder
+# Build artifacts
+/build/
+/dist/

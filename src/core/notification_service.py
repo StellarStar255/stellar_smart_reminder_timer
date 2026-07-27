@@ -2,7 +2,10 @@
 
 from typing import Optional
 import subprocess
+import sys
 import os
+
+IS_MACOS = sys.platform == "darwin"
 
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QTimer
 from PyQt6.QtWidgets import (
@@ -29,6 +32,13 @@ class NotificationService(QObject):
         self._alarm_mode = self.ALARM_CONTINUOUS  # Default: continuous
         self._alarm_timer: Optional[QTimer] = None
         self._alarm_process: Optional[subprocess.Popen] = None
+        # Qt tray icon used for system notifications on Windows/Linux,
+        # where osascript is unavailable; set by MainWindow after setup.
+        self._tray_icon = None
+
+    def set_tray_icon(self, tray_icon):
+        """Provide a QSystemTrayIcon for non-macOS system notifications."""
+        self._tray_icon = tray_icon
 
     @property
     def alarm_mode(self) -> str:
@@ -70,6 +80,9 @@ class NotificationService(QObject):
 
     def _play_alarm_three_times(self):
         """Play alarm sound 3 times."""
+        if not IS_MACOS:
+            self._beep_n_times(3)
+            return
         sound_path = self._get_sound_path()
         if sound_path:
             try:
@@ -82,9 +95,34 @@ class NotificationService(QObject):
             except Exception:
                 pass
 
+    def _beep_n_times(self, count: int, interval_ms: int = 700):
+        """Cross-platform fallback: system beep repeated a few times."""
+        for i in range(count):
+            QTimer.singleShot(i * interval_ms, self._system_beep)
+
+    @staticmethod
+    def _system_beep():
+        """One system alert sound without any external process."""
+        if sys.platform == "win32":
+            try:
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                return
+            except Exception:
+                pass
+        from PyQt6.QtWidgets import QApplication
+        QApplication.beep()
+
     def _start_continuous_alarm(self):
         """Start continuous alarm that plays until stopped."""
         self.stop_alarm()  # Stop any existing alarm
+
+        if not IS_MACOS:
+            self._system_beep()
+            self._alarm_timer = QTimer(self)
+            self._alarm_timer.timeout.connect(self._system_beep)
+            self._alarm_timer.start(1500)
+            return
 
         sound_path = self._get_sound_path()
         if not sound_path:
@@ -130,6 +168,9 @@ class NotificationService(QObject):
 
     def _play_reminder_sound(self):
         """Play a softer reminder sound."""
+        if not IS_MACOS:
+            self._system_beep()
+            return
         sound_path = "/System/Library/Sounds/Tink.aiff"
         if os.path.exists(sound_path):
             try:
@@ -142,12 +183,20 @@ class NotificationService(QObject):
                 pass
 
     def _send_system_notification(self, title: str, message: str):
-        """Send macOS system notification via osascript.
+        """Send a system notification.
 
-        Uses 'tell application \"System Events\"' so that clicking the
-        notification activates a background process instead of opening
-        Script Editor.
+        macOS: osascript via 'tell application \"System Events\"' so that
+        clicking the notification activates a background process instead of
+        opening Script Editor. Windows/Linux: tray icon balloon message.
         """
+        if not IS_MACOS:
+            if self._tray_icon is not None:
+                try:
+                    self._tray_icon.showMessage(title, message)
+                except Exception:
+                    pass
+            return
+
         safe_title = title.replace('"', '\\"').replace("'", "\\'")
         safe_message = message.replace('"', '\\"').replace("'", "\\'").replace('\n', ' ')
 

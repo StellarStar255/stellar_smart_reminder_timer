@@ -19,8 +19,16 @@ faulthandler.enable(_crash_log_file)
 # Python 3.13 while running anaconda's 3.12), the process mixes two Qt
 # builds and segfaults deep inside QtGui — seen as a crash in
 # QImage::save() when pasting clipboard images.
-import PyQt6 as _PyQt6
-_qt_plugin_dir = os.path.join(os.path.dirname(_PyQt6.__file__), "Qt6", "plugins")
+# Source runs only: PyInstaller bundles resolve plugins themselves, and this
+# override would point at a path that doesn't exist inside the app bundle.
+if getattr(sys, "frozen", False):
+    _qt_plugin_dir = os.path.join(
+        getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)),
+        "PyQt6", "Qt6", "plugins",
+    )
+else:
+    import PyQt6 as _PyQt6
+    _qt_plugin_dir = os.path.join(os.path.dirname(_PyQt6.__file__), "Qt6", "plugins")
 if os.path.isdir(_qt_plugin_dir):
     os.environ["QT_PLUGIN_PATH"] = _qt_plugin_dir
     os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = os.path.join(_qt_plugin_dir, "platforms")
@@ -56,20 +64,24 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
+    from src.version import __version__, APP_DISPLAY_NAME
+    from src.resources import resource_path
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("星际脉冲")
+    app.setApplicationName(APP_DISPLAY_NAME)
+    app.setApplicationVersion(__version__)
     app.setOrganizationName("StellarPulse")
     app.setOrganizationDomain("stellarpulse.app")
 
     # Set application icon
-    icon_path = os.path.join(BASE_DIR, "assets", "stellar_pulse_smart_reminder_timer.png")
+    icon_path = resource_path("assets", "stellar_pulse_smart_reminder_timer.png")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
 
-    # Set default font
-    font = QFont(".AppleSystemUIFont", 13)
-    app.setFont(font)
+    # Set default font (macOS system font; other platforms keep Qt's default)
+    if sys.platform == "darwin":
+        app.setFont(QFont(".AppleSystemUIFont", 13))
 
     # Initialize database
     db = Database()

@@ -1,5 +1,6 @@
 """Main application window."""
 
+import sys
 from datetime import date, datetime
 from typing import Dict, Optional
 from PyQt6.QtWidgets import (
@@ -27,8 +28,11 @@ from src.ui.components.task_notebook_dialog import TaskNotebookDialog
 from src.ui.styles import LIGHT_THEME, DARK_THEME
 
 
+IS_MACOS = sys.platform == "darwin"
+
+
 def _create_objc_delegate_class():
-    """Create ObjC delegate class once at module level."""
+    """Create ObjC delegate class once at module level (macOS only)."""
     import objc
     from Foundation import NSObject
 
@@ -44,7 +48,7 @@ def _create_objc_delegate_class():
 
     return _TrayMenuDelegate
 
-_TrayMenuDelegate = _create_objc_delegate_class()
+_TrayMenuDelegate = _create_objc_delegate_class() if IS_MACOS else None
 
 
 class _CardsScrollArea(QScrollArea):
@@ -130,6 +134,25 @@ class MainWindow(QMainWindow):
         self._stats_timer.timeout.connect(self._update_stats)
         self._stats_timer.start(5000)  # Update every 5 seconds
 
+        # Check GitHub Releases for a newer version shortly after startup
+        self._update_checker = None
+        QTimer.singleShot(3000, self._check_for_updates)
+
+    def _check_for_updates(self):
+        """Kick off the background update check (silent when up to date)."""
+        from src.core.update_checker import UpdateChecker
+        self._update_checker = UpdateChecker(self)
+        self._update_checker.update_available.connect(self._on_update_available)
+        self._update_checker.start()
+
+    def _on_update_available(self, version: str, notes: str,
+                             asset_name: str, asset_url: str):
+        """Offer the one-click upgrade dialog."""
+        from src.ui.components.update_dialog import UpdateDialog
+        dialog = UpdateDialog(version, notes, asset_name, asset_url,
+                              dark_mode=self._dark_mode, parent=self)
+        dialog.exec()
+
     def _setup_ui(self):
         """Set up the main window UI."""
         self.setWindowTitle("星际脉动")
@@ -138,8 +161,8 @@ class MainWindow(QMainWindow):
 
         # Set window icon
         import os
-        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                                  "assets", "stellar_pulse_smart_reminder_timer.png")
+        from src.resources import resource_path
+        icon_path = resource_path("assets", "stellar_pulse_smart_reminder_timer.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
@@ -458,6 +481,41 @@ class MainWindow(QMainWindow):
         self._apply_theme()
 
     def _setup_tray(self):
+        """Set up the tray icon: native status bar on macOS, Qt elsewhere."""
+        if not IS_MACOS:
+            self._setup_tray_qt()
+            return
+        self._setup_tray_macos()
+
+    def _setup_tray_qt(self):
+        """Cross-platform QSystemTrayIcon fallback (Windows/Linux)."""
+        from src.resources import resource_path
+
+        self.tray_icon = QSystemTrayIcon(self)
+        icon_path = resource_path("assets", "stellar_pulse_smart_reminder_timer.png")
+        if QIcon(icon_path).isNull():
+            self.tray_icon.setIcon(self.windowIcon())
+        else:
+            self.tray_icon.setIcon(QIcon(icon_path))
+
+        menu = QMenu()
+        show_action = QAction("显示窗口", menu)
+        show_action.triggered.connect(self._show_window)
+        menu.addAction(show_action)
+        menu.addSeparator()
+        quit_action = QAction("退出", menu)
+        quit_action.triggered.connect(QApplication.quit)
+        menu.addAction(quit_action)
+        self._tray_menu = menu  # keep alive; setContextMenu doesn't take ownership
+        self.tray_icon.setContextMenu(menu)
+        self.tray_icon.activated.connect(
+            lambda reason: self._show_window()
+            if reason == QSystemTrayIcon.ActivationReason.Trigger else None
+        )
+        self.tray_icon.show()
+        self.notification_service.set_tray_icon(self.tray_icon)
+
+    def _setup_tray_macos(self):
         """Set up macOS native status bar item via pyobjc."""
         from AppKit import (
             NSStatusBar, NSImage, NSVariableStatusItemLength,
