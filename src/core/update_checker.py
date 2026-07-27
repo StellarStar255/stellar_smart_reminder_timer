@@ -219,13 +219,16 @@ def _install_windows(exe_path: str) -> str | None:
 
 
 def _install_linux(deb_path: str) -> str | None:
-    """Install the deb via pkexec (GUI auth prompt), then relaunch."""
+    """Install the deb via pkexec (GUI auth prompt), then relaunch.
+
+    apt-get (not dpkg -i) so the declared Depends get pulled in too.
+    """
     exe = sys.executable if getattr(sys, "frozen", False) else None
     relaunch = f' && nohup "{exe}" >/dev/null 2>&1 &' if exe else ""
     try:
         subprocess.Popen(
             ["/bin/sh", "-c",
-             f'pkexec dpkg -i "{deb_path}"{relaunch}'],
+             f'pkexec apt-get install -y "{deb_path}"{relaunch}'],
             start_new_session=True,
         )
         return None

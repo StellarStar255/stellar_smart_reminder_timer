@@ -51,7 +51,10 @@ jobs:
           path: dist/*.exe
 
   build-linux:
-    runs-on: ubuntu-latest
+    # Oldest supported LTS: binaries link against its glibc, so the deb
+    # runs on Ubuntu 22.04+ / Debian 12+. ubuntu-latest (24.04) would
+    # produce binaries that fail on 22.04 with GLIBC version errors.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

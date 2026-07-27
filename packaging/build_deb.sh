@@ -38,6 +38,9 @@ Categories=Utility;Clock;
 EOF
 
 INSTALLED_SIZE=$(du -sk "$PKG/opt" | cut -f1)
+# Depends lists the system libraries Qt's bundled xcb platform plugin dlopens
+# at runtime — libxcb-cursor0 in particular is absent on stock Ubuntu 22.04
+# and its lack makes the app exit with "could not load the xcb plugin".
 cat > "$PKG/DEBIAN/control" <<EOF
 Package: stellarpulse
 Version: ${VERSION}
@@ -45,6 +48,7 @@ Section: utils
 Priority: optional
 Architecture: ${ARCH}
 Installed-Size: ${INSTALLED_SIZE}
+Depends: libxcb-cursor0, libxkbcommon-x11-0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-randr0, libxcb-render-util0, libxcb-shape0, libxcb-xkb1, libegl1, libgl1, libfontconfig1, libdbus-1-3
 Maintainer: StellarPulse <goosehuangmatt@gmail.com>
 Description: StellarPulse smart reminder timer (星际脉动)
  Task timer with presets, categories, statistics and reminders.
