@@ -345,6 +345,28 @@ class MainWindow(QMainWindow):
 
         header_layout.addStretch()
 
+        # One-click update check button
+        self.update_btn = QPushButton("🔄 检查更新")
+        self.update_btn.setFixedHeight(36)
+        self.update_btn.setToolTip("检查新版本，一键升级")
+        self.update_btn.clicked.connect(
+            lambda: self._check_for_updates(manual=True))
+        self.update_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f5f5f7;
+                color: #1d1d1f;
+                border: 1px solid #d2d2d7;
+                border-radius: 8px;
+                font-size: 14px;
+                padding: 0 12px;
+            }
+            QPushButton:hover {
+                background-color: #e5e5ea;
+                color: #1d1d1f;
+            }
+        """)
+        header_layout.addWidget(self.update_btn)
+
         # Alarm mode toggle button
         self.alarm_btn = QPushButton("🔔 一直响")
         self.alarm_btn.setFixedHeight(36)
@@ -1478,6 +1500,7 @@ class MainWindow(QMainWindow):
                     color: #ffffff;
                 }
             """)
+            self.update_btn.setStyleSheet(self.theme_btn.styleSheet())
         else:
             self.alarm_btn.setStyleSheet("""
                 QPushButton {
@@ -1507,6 +1530,7 @@ class MainWindow(QMainWindow):
                     color: #1d1d1f;
                 }
             """)
+            self.update_btn.setStyleSheet(self.theme_btn.styleSheet())
 
         # Manage-presets button follows the same look as the other header buttons
         if self._dark_mode:
