@@ -30,6 +30,11 @@ hiddenimports = []
 if IS_MAC:
     hiddenimports += ["objc", "AppKit", "Foundation"]
 
+# Developer ID signing (macOS): set CODESIGN_IDENTITY to e.g.
+# "Developer ID Application: Name (TEAMID)"; unset -> ad-hoc build.
+CODESIGN_IDENTITY = os.environ.get("CODESIGN_IDENTITY") if IS_MAC else None
+ENTITLEMENTS = os.path.join(SPECPATH, "entitlements.plist") if CODESIGN_IDENTITY else None
+
 a = Analysis(
     [os.path.join(REPO_ROOT, "main.py")],
     pathex=[REPO_ROOT],
@@ -57,6 +62,8 @@ exe = EXE(
     upx=False,
     console=False,
     icon=icon_file,
+    codesign_identity=CODESIGN_IDENTITY,
+    entitlements_file=ENTITLEMENTS,
 )
 
 coll = COLLECT(
