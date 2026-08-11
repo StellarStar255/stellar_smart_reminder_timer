@@ -64,6 +64,15 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
+    # The user-chosen UI scale (Aa 字号 menu) is applied through
+    # QT_SCALE_FACTOR, which Qt only reads before the QApplication is
+    # created — so the database must be opened first.
+    db = Database()
+    db.initialize()
+    ui_scale = db.get_setting("ui_scale", "1.0")
+    if ui_scale not in ("", "1.0"):
+        os.environ["QT_SCALE_FACTOR"] = ui_scale
+
     from src.version import __version__, APP_DISPLAY_NAME
     from src.resources import resource_path
 
@@ -82,10 +91,6 @@ def main():
     # Set default font (macOS system font; other platforms keep Qt's default)
     if sys.platform == "darwin":
         app.setFont(QFont(".AppleSystemUIFont", 13))
-
-    # Initialize database
-    db = Database()
-    db.initialize()
 
     # Create and show main window
     window = MainWindow(db)

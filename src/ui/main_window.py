@@ -343,6 +343,14 @@ class MainWindow(QMainWindow):
         self._transfer_menu.sizeHint()
         toolbar_flow.addWidget(self.transfer_btn)
 
+        # UI scale menu — applied via QT_SCALE_FACTOR, so it needs a restart
+        self.font_btn = QPushButton("Aa 字号")
+        self.font_btn.setFixedHeight(32)
+        self.font_btn.setToolTip("调整字体和界面整体显示大小")
+        self.font_btn.clicked.connect(self._show_font_menu)
+        self.font_btn.setStyleSheet(self.manage_btn.styleSheet())
+        toolbar_flow.addWidget(self.font_btn)
+
         header_layout.addStretch()
 
         # One-click update check button
@@ -1339,6 +1347,48 @@ class MainWindow(QMainWindow):
             # Remove completed card
             self._remove_timer_card(task.id)
 
+    _UI_SCALES = [("小", "0.9"), ("标准", "1.0"), ("大", "1.15"), ("特大", "1.3")]
+
+    def _show_font_menu(self):
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        current = self.db.get_setting("ui_scale", "1.0") or "1.0"
+        for label, value in self._UI_SCALES:
+            action = menu.addAction(f"{label}（{round(float(value) * 100)}%）")
+            action.setCheckable(True)
+            action.setChecked(value == current)
+            action.triggered.connect(lambda _, v=value: self._set_ui_scale(v))
+        menu.exec(self.font_btn.mapToGlobal(self.font_btn.rect().bottomLeft()))
+
+    def _set_ui_scale(self, value: str):
+        if value == (self.db.get_setting("ui_scale", "1.0") or "1.0"):
+            return
+        self.db.set_setting("ui_scale", value)
+        resp = QMessageBox.question(
+            self, "调整字号",
+            "新的显示大小将在重启应用后生效。\n是否立即重启？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if resp == QMessageBox.StandardButton.Yes:
+            self._restart_app()
+
+    def _restart_app(self):
+        """Relaunch this app and quit the current process."""
+        import os
+        import subprocess
+        from src.core.update_checker import _current_mac_app_bundle
+        app_path = _current_mac_app_bundle()
+        if app_path:
+            # A fresh `open` after this process exits avoids two instances
+            # racing on the sqlite database.
+            subprocess.Popen(["/bin/bash", "-c", f'sleep 1; open "{app_path}"'],
+                             start_new_session=True)
+        elif getattr(sys, "frozen", False):
+            subprocess.Popen([sys.executable], start_new_session=True)
+        else:
+            subprocess.Popen([sys.executable, os.path.abspath(sys.argv[0])],
+                             start_new_session=True)
+        QApplication.quit()
+
     def _show_window(self):
         """Show and activate the main window."""
         self.show()
@@ -1568,6 +1618,7 @@ class MainWindow(QMainWindow):
         self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
         self.sort_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
         self.view_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
+        self.font_btn.setStyleSheet(self.manage_btn.styleSheet())
 
         # Update components
         self.sidebar.set_dark_mode(self._dark_mode)
