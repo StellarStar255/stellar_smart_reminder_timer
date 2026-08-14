@@ -28,7 +28,7 @@ elif IS_WIN:
 
 hiddenimports = []
 if IS_MAC:
-    hiddenimports += ["objc", "AppKit", "Foundation"]
+    hiddenimports += ["objc", "AppKit", "Foundation", "UserNotifications"]
 
 # Developer ID signing (macOS): set CODESIGN_IDENTITY to e.g.
 # "Developer ID Application: Name (TEAMID)"; unset -> ad-hoc build.

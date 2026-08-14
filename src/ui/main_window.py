@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._setup_tray()
+        self._setup_system_notifications()
         self._connect_signals()
         self._load_data()
 
@@ -649,6 +650,16 @@ class MainWindow(QMainWindow):
         ns_menu.addItem_(quit_item)
 
         self._status_item.setMenu_(ns_menu)
+
+    def _setup_system_notifications(self):
+        """Register for macOS notifications posted as the app itself."""
+        if not IS_MACOS:
+            return
+        from src.core import macos_notifier
+        if not macos_notifier.is_available():
+            return  # source checkout / no bundle — osascript fallback is used
+        macos_notifier.set_click_handler(self._show_window)
+        macos_notifier.request_authorization()
 
     def _connect_signals(self):
         """Connect all signals."""

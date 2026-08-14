@@ -185,9 +185,11 @@ class NotificationService(QObject):
     def _send_system_notification(self, title: str, message: str):
         """Send a system notification.
 
-        macOS: osascript via 'tell application \"System Events\"' so that
-        clicking the notification activates a background process instead of
-        opening Script Editor. Windows/Linux: tray icon balloon message.
+        macOS: UNUserNotificationCenter when running from the signed app
+        bundle, so the banner is signed \"星际脉动\" and can be managed on its
+        own row in 系统设置 → 通知; falls back to osascript (posted as System
+        Events) when unavailable, e.g. running from a source checkout.
+        Windows/Linux: tray icon balloon message.
         """
         if not IS_MACOS:
             if self._tray_icon is not None:
@@ -195,6 +197,10 @@ class NotificationService(QObject):
                     self._tray_icon.showMessage(title, message)
                 except Exception:
                     pass
+            return
+
+        from src.core import macos_notifier
+        if macos_notifier.send(title, message):
             return
 
         safe_title = title.replace('"', '\\"').replace("'", "\\'")
