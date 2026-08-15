@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QScrollArea, QFrame, QSystemTrayIcon, QMenu,
     QApplication, QMessageBox, QSizePolicy, QLineEdit
 )
-from PyQt6.QtCore import Qt, QTimer, QEvent
+from PyQt6.QtCore import Qt, QTimer, QEvent, QObject
 from PyQt6.QtGui import QIcon, QAction, QFont, QPixmap, QPainter, QColor, QBrush
 
 from src.data.database import Database
@@ -54,6 +54,26 @@ def _create_objc_delegate_class():
     return _TrayMenuDelegate
 
 _TrayMenuDelegate = _create_objc_delegate_class() if IS_MACOS else None
+
+
+class _AppActivateFilter(QObject):
+    """Runs a callback whenever the app is brought to the front.
+
+    Used to re-read the notification permission, so granting it in System
+    Settings takes effect on the very next timer instead of after a restart.
+    """
+
+    def __init__(self, callback):
+        super().__init__()
+        self._callback = callback
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.ApplicationActivate:
+            try:
+                self._callback()
+            except Exception:
+                pass  # an exception through a Qt virtual would take the app down
+        return super().eventFilter(obj, event)
 
 
 class _CardsScrollArea(QScrollArea):
@@ -659,7 +679,48 @@ class MainWindow(QMainWindow):
         if not macos_notifier.is_available():
             return  # source checkout / no bundle — osascript fallback is used
         macos_notifier.set_click_handler(self._show_window)
+        # Prompts on a first-ever launch; a no-op once the user has answered.
         macos_notifier.request_authorization()
+
+        # Pick up a switch flipped in System Settings without a restart.
+        self._notify_activate_filter = _AppActivateFilter(
+            macos_notifier.refresh_authorization)
+        QApplication.instance().installEventFilter(self._notify_activate_filter)
+
+        # The status query is async, so give it a moment before judging it.
+        QTimer.singleShot(3000, self._offer_notification_permission_help)
+
+    def _offer_notification_permission_help(self):
+        """Guide the user to the settings pane when permission was denied.
+
+        macOS only ever shows its own prompt once per bundle id, so an app
+        that was denied — including by a version that never asked properly —
+        can never ask again; the switch has to be flipped by hand.
+        """
+        from src.core import macos_notifier
+        if macos_notifier.authorization_status() != macos_notifier.STATUS_DENIED:
+            return
+        if self.db.get_setting("notify_permission_hint", "1") != "1":
+            return
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("系统通知未开启")
+        box.setText("「星际脉动」的通知权限是关闭的，计时结束时不会弹出提醒。")
+        box.setInformativeText(
+            "macOS 只会在首次安装时询问一次，之后只能手动开启：\n"
+            "系统设置 → 通知 → 星际脉动 → 打开「允许通知」\n"
+            "建议提醒样式选「提醒」，横幅几秒就自动消失，容易错过。")
+        open_btn = box.addButton("打开系统设置", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("以后再说", QMessageBox.ButtonRole.RejectRole)
+        never_btn = box.addButton("不再提示", QMessageBox.ButtonRole.DestructiveRole)
+        box.setDefaultButton(open_btn)
+        box.exec()
+
+        if box.clickedButton() is open_btn:
+            macos_notifier.open_notification_settings()
+        elif box.clickedButton() is never_btn:
+            self.db.set_setting("notify_permission_hint", "0")
 
     def _connect_signals(self):
         """Connect all signals."""

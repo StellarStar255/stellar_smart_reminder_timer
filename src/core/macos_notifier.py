@@ -11,12 +11,16 @@ fallback in NotificationService.
 
 from typing import Callable, Optional
 import itertools
+import subprocess
 import sys
 
 IS_MACOS = sys.platform == "darwin"
 
-# UNAuthorizationStatus values that actually put banners on screen.
-_AUTHORIZED_STATUSES = (2, 3, 4)  # authorized, provisional, ephemeral
+# UNAuthorizationStatus
+STATUS_NOT_DETERMINED = 0
+STATUS_DENIED = 1
+# Values that actually put banners on screen: authorized, provisional, ephemeral
+_AUTHORIZED_STATUSES = (2, 3, 4)
 
 # UNAuthorizationOptions / UNNotificationPresentationOptions are not exposed
 # as constants by every pyobjc build; the raw bit values are stable API.
@@ -34,6 +38,7 @@ _on_click: Optional[Callable[[], None]] = None
 # None until the first (async) settings query answers. Treated as "not
 # authorized" so the very first notification still goes out via osascript.
 _authorized: Optional[bool] = None
+_status: Optional[int] = None  # raw UNAuthorizationStatus, None = not read yet
 
 
 def _make_delegate_class():
@@ -100,11 +105,41 @@ def is_available() -> bool:
 
 
 def _store_settings(settings):
-    global _authorized
+    global _authorized, _status
     try:
-        _authorized = settings.authorizationStatus() in _AUTHORIZED_STATUSES
+        _status = settings.authorizationStatus()
+        _authorized = _status in _AUTHORIZED_STATUSES
     except Exception:
         _authorized = False
+
+
+def authorization_status() -> Optional[int]:
+    """Raw UNAuthorizationStatus, or None if it has not been read yet."""
+    return _status
+
+
+def open_notification_settings():
+    """Open System Settings on this app's own notification row.
+
+    The only recourse once permission is denied: macOS shows its own
+    authorization prompt exactly once per bundle id, and reinstalling does
+    not reset that record.
+    """
+    if not IS_MACOS:
+        return
+    url = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+    try:
+        from Foundation import NSBundle
+        bundle_id = NSBundle.mainBundle().bundleIdentifier()
+        if bundle_id:
+            url = f"{url}?id={bundle_id}"
+    except Exception:
+        pass
+    try:
+        subprocess.Popen(["open", url],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 
 def refresh_authorization():
@@ -132,8 +167,10 @@ def request_authorization():
 
 
 def _set_authorized(value: bool):
-    global _authorized
+    global _authorized, _status
     _authorized = value
+    if value:
+        _status = _AUTHORIZED_STATUSES[0]
 
 
 def set_click_handler(handler: Optional[Callable[[], None]]):
