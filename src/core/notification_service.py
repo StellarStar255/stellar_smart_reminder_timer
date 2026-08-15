@@ -188,7 +188,8 @@ class NotificationService(QObject):
         macOS: UNUserNotificationCenter when running from the signed app
         bundle, so the banner is signed \"星际脉动\" and can be managed on its
         own row in 系统设置 → 通知; falls back to osascript (posted as System
-        Events) when unavailable, e.g. running from a source checkout.
+        Events) when it is unavailable or unauthorized — a source checkout,
+        or the app's notification permission being switched off.
         Windows/Linux: tray icon balloon message.
         """
         if not IS_MACOS:
@@ -200,9 +201,15 @@ class NotificationService(QObject):
             return
 
         from src.core import macos_notifier
-        if macos_notifier.send(title, message):
+        if macos_notifier.send(
+            title, message,
+            on_failure=lambda: self._send_osascript_notification(title, message),
+        ):
             return
+        self._send_osascript_notification(title, message)
 
+    def _send_osascript_notification(self, title: str, message: str):
+        """Fallback banner, posted under System Events' identity."""
         safe_title = title.replace('"', '\\"').replace("'", "\\'")
         safe_message = message.replace('"', '\\"').replace("'", "\\'").replace('\n', ' ')
 

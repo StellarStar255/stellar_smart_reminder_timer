@@ -15,6 +15,9 @@ import sys
 
 IS_MACOS = sys.platform == "darwin"
 
+# UNAuthorizationStatus values that actually put banners on screen.
+_AUTHORIZED_STATUSES = (2, 3, 4)  # authorized, provisional, ephemeral
+
 # UNAuthorizationOptions / UNNotificationPresentationOptions are not exposed
 # as constants by every pyobjc build; the raw bit values are stable API.
 _AUTH_BADGE = 1 << 0
@@ -28,6 +31,9 @@ _delegate = None          # kept alive: the center holds only a weak delegate
 _available: Optional[bool] = None
 _ids = itertools.count(1)
 _on_click: Optional[Callable[[], None]] = None
+# None until the first (async) settings query answers. Treated as "not
+# authorized" so the very first notification still goes out via osascript.
+_authorized: Optional[bool] = None
 
 
 def _make_delegate_class():
@@ -93,6 +99,24 @@ def is_available() -> bool:
     return _available
 
 
+def _store_settings(settings):
+    global _authorized
+    try:
+        _authorized = settings.authorizationStatus() in _AUTHORIZED_STATUSES
+    except Exception:
+        _authorized = False
+
+
+def refresh_authorization():
+    """Re-read the authorization status (async; result lands in _authorized)."""
+    if not is_available():
+        return
+    try:
+        _center.getNotificationSettingsWithCompletionHandler_(_store_settings)
+    except Exception:
+        pass
+
+
 def request_authorization():
     """Ask for notification permission (first launch shows the system prompt)."""
     if not is_available():
@@ -100,10 +124,16 @@ def request_authorization():
     try:
         _center.requestAuthorizationWithOptions_completionHandler_(
             _AUTH_ALERT | _AUTH_SOUND | _AUTH_BADGE,
-            lambda granted, error: None,
+            lambda granted, error: _set_authorized(bool(granted)),
         )
     except Exception:
         pass
+    refresh_authorization()
+
+
+def _set_authorized(value: bool):
+    global _authorized
+    _authorized = value
 
 
 def set_click_handler(handler: Optional[Callable[[], None]]):
@@ -112,9 +142,22 @@ def set_click_handler(handler: Optional[Callable[[], None]]):
     _on_click = handler
 
 
-def send(title: str, message: str) -> bool:
-    """Post a notification. Returns False if it could not be delivered."""
+def send(title: str, message: str,
+         on_failure: Optional[Callable[[], None]] = None) -> bool:
+    """Post a notification; False means the caller must use its own fallback.
+
+    When permission is denied the system accepts addNotificationRequest
+    without an error and files the notification straight into Notification
+    Center — no banner, no complaint. So authorization is checked up front
+    rather than trusting the request to fail: a stale "denied" from an
+    earlier version would otherwise silently swallow every reminder.
+    """
     if not is_available():
+        return False
+    if not _authorized:
+        # Re-read it so a permission the user just granted is picked up for
+        # the next notification; this one goes out via the caller's fallback.
+        refresh_authorization()
         return False
     try:
         from UserNotifications import (
@@ -129,7 +172,18 @@ def send(title: str, message: str) -> bool:
         request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
             f"stellarpulse-{next(_ids)}", content, None
         )
-        _center.addNotificationRequest_withCompletionHandler_(request, None)
+
+        def _completed(error):
+            # Runs off the Qt thread — the fallback must not touch Qt.
+            if error is not None:
+                _set_authorized(False)
+                if on_failure is not None:
+                    try:
+                        on_failure()
+                    except Exception:
+                        pass
+
+        _center.addNotificationRequest_withCompletionHandler_(request, _completed)
         return True
     except Exception:
         return False
