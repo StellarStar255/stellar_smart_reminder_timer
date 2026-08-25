@@ -3,6 +3,7 @@ from .task_manager import TaskManager
 from .preset_manager import PresetManager
 from .notification_service import NotificationService
 from .statistics_engine import StatisticsEngine
+from .reminder_scheduler import ReminderScheduler
 
 __all__ = [
     'TimerEngine',
@@ -10,4 +11,5 @@ __all__ = [
     'PresetManager',
     'NotificationService',
     'StatisticsEngine',
+    'ReminderScheduler',
 ]

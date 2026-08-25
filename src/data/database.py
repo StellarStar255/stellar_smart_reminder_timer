@@ -116,6 +116,25 @@ class Database:
             )
         """)
 
+        # Scheduled reminders (wall-clock alarms, independent of countdowns).
+        # No foreign key on category_id: it is optional and only used for the
+        # timer a reminder can auto-start.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                remind_at TEXT NOT NULL,
+                repeat_mode TEXT DEFAULT 'none',
+                enabled INTEGER DEFAULT 1,
+                notes TEXT DEFAULT '',
+                auto_start_minutes INTEGER DEFAULT 0,
+                category_id INTEGER,
+                created_at TEXT NOT NULL,
+                last_fired_at TEXT,
+                snoozed_until TEXT
+            )
+        """)
+
         # Task notebooks (per-task-name notes)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS task_notebooks (

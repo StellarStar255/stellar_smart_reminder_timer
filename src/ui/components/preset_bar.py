@@ -4,7 +4,8 @@ import random
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QPushButton, QDialog, QVBoxLayout,
     QLabel, QLineEdit, QSpinBox, QComboBox, QDialogButtonBox,
-    QScrollArea, QMenu, QApplication
+    QScrollArea, QMenu, QApplication, QDateTimeEdit, QTextEdit,
+    QCalendarWidget
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QMimeData, QEvent
 from PyQt6.QtGui import QDrag
@@ -467,6 +468,33 @@ class PresetBar(QWidget):
                     """)
 
 
+def _style_calendar_popup(calendar: QCalendarWidget, dark_mode: bool):
+    """Theme a QDateTimeEdit's calendar popup, which renders in its own window."""
+    if dark_mode:
+        bg, text, header, disabled, sel = "#2c2c2e", "#ffffff", "#3a3a3c", "#636366", "#0a84ff"
+    else:
+        bg, text, header, disabled, sel = "#ffffff", "#1d1d1f", "#f5f5f7", "#c7c7cc", "#007AFF"
+    calendar.setStyleSheet(f"""
+        QCalendarWidget QWidget {{ alternate-background-color: {bg}; }}
+        QCalendarWidget QAbstractItemView:enabled {{
+            background-color: {bg};
+            color: {text};
+            selection-background-color: {sel};
+            selection-color: #ffffff;
+        }}
+        QCalendarWidget QAbstractItemView:disabled {{ color: {disabled}; }}
+        QCalendarWidget QWidget#qt_calendar_navigationbar {{ background-color: {header}; }}
+        QCalendarWidget QToolButton {{
+            color: {text};
+            background-color: transparent;
+            border: none;
+            padding: 4px 8px;
+        }}
+        QCalendarWidget QToolButton:hover {{ background-color: {sel}; color: #ffffff; }}
+        QCalendarWidget QSpinBox {{ color: {text}; background-color: {bg}; }}
+    """)
+
+
 def _apply_dialog_theme(dialog: QDialog, dark_mode: bool):
     """Apply theme-aware styling to a dialog, overriding global theme."""
     from PyQt6.QtGui import QColor
@@ -499,32 +527,54 @@ def _apply_dialog_theme(dialog: QDialog, dark_mode: bool):
     """
     for w in dialog.findChildren(QLabel):
         w.setStyleSheet(label_style)
-    # Collect QLineEdits that belong to QSpinBox so we skip them below
+    # Collect QLineEdits that belong to a spin box so we skip them below
     spinbox_line_edits = set()
-    for w in dialog.findChildren(QSpinBox):
-        le = w.lineEdit()
-        if le:
-            spinbox_line_edits.add(le)
-        # Use only palette for QSpinBox - stylesheets conflict with internal QLineEdit
+    # QDateTimeEdit is a QAbstractSpinBox, not a QSpinBox, so findChildren
+    # misses it — but it needs the very same palette-only treatment: a
+    # stylesheet with padding shifts its internal line edit and clips the
+    # digits. The calendar popup is a separate top-level window that inherits
+    # nothing from the dialog, so it is styled explicitly.
+    def _style_spin_like(w):
+        """Palette-only theming for spin boxes and date edits.
+
+        Stylesheets fight with their internal QLineEdit — padding shifts the
+        editor inside the frame and clips the digits — so only the palette is
+        touched. The inner editor is reached via findChildren instead of the
+        protected lineEdit(), which sip refuses on widgets that were created
+        in C++ (the calendar popup's year spin box, for one).
+        """
         w.setStyleSheet("")
         pal = w.palette()
         pal.setColor(pal.ColorRole.Text, QColor(text))
         pal.setColor(pal.ColorRole.Base, QColor(input_bg))
         pal.setColor(pal.ColorRole.WindowText, QColor(text))
         w.setPalette(pal)
-        if le:
+        for le in w.findChildren(QLineEdit):
+            spinbox_line_edits.add(le)
             le.setStyleSheet("")
             le_pal = le.palette()
             le_pal.setColor(le_pal.ColorRole.Text, QColor(text))
             le_pal.setColor(le_pal.ColorRole.Base, QColor(input_bg))
             le.setPalette(le_pal)
+
+    # QDateTimeEdit is a QAbstractSpinBox, not a QSpinBox, so findChildren
+    # misses it and it has to be handled alongside. Its calendar popup is a
+    # separate top-level window that inherits nothing from the dialog.
+    for w in dialog.findChildren(QDateTimeEdit):
+        _style_spin_like(w)
+        calendar = w.calendarWidget()
+        if calendar is not None:
+            _style_calendar_popup(calendar, dark_mode)
+    for w in dialog.findChildren(QSpinBox):
+        _style_spin_like(w)
     for w in dialog.findChildren(QLineEdit):
         if w in spinbox_line_edits:
             continue
         w.setStyleSheet(f"QLineEdit {{ {input_style} }} QLineEdit:focus {{ border-color: {focus_border}; }}")
     for w in dialog.findChildren(QComboBox):
         w.setStyleSheet(f"QComboBox {{ {input_style} }} QComboBox:focus {{ border-color: {focus_border}; }}")
-
+    for w in dialog.findChildren(QTextEdit):
+        w.setStyleSheet(f"QTextEdit {{ {input_style} }} QTextEdit:focus {{ border-color: {focus_border}; }}")
     palette = dialog.palette()
     palette.setColor(palette.ColorRole.Window, QColor(bg))
     palette.setColor(palette.ColorRole.WindowText, QColor(text))

@@ -5,6 +5,7 @@ A smart task timer and reminder app for macOS.
 ## Features
 
 - **Preset Timers** - Quick-start with preset time cards, or create custom timers
+- **Scheduled Reminders** - Fire at a specific date and time, with daily / weekday / weekly / monthly repeats
 - **Category Management** - Organize tasks by categories (study, work, exercise, etc.)
 - **Statistics Dashboard** - View time distribution charts and task analytics
 - **Dark Mode** - Full light/dark theme support
@@ -58,6 +59,24 @@ python main.py
 - **Search presets** - Type in the search box to filter preset timers
 - **Dark mode** - Click the theme toggle button in the top-right corner
 - **Alarm mode** - Toggle between continuous alarm and 3-beep mode
+
+### Scheduled Reminders
+
+Timers count down; reminders fire at a wall-clock date and time. Create one
+with the "⏰ 定时提醒" toolbar button or "+ 新建提醒" in the reminder list below
+the timer cards.
+
+- **Time** - Pick any date and time, or use the shortcuts (10 分钟后, 明天 09:00, …)
+- **Repeat** - 不重复 / 每天 / 工作日 / 每周 / 每月. A monthly reminder set for the
+  31st falls back to the last day in shorter months without drifting there
+- **Auto-start a timer** - Optionally kick off a countdown of N minutes when the
+  reminder fires, filed under the category you choose
+- **Snooze** - The alarm popup can postpone by 5 / 10 / 30 / 60 minutes
+- **Toggle** - The 🔔 button switches a reminder off without deleting it
+
+Reminders are compared against the system clock, so they survive app restarts
+and sleep. One that came due more than 10 minutes ago — while the app was
+closed — is marked 已错过 in the list instead of ringing out of the blue.
 
 ### Background Mode
 

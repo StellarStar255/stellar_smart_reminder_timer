@@ -66,6 +66,18 @@ class NotificationService(QObject):
         # Emit signal for in-app popup
         self.show_popup.emit(title, message, task)
 
+    def notify_reminder(self, title: str, message: str):
+        """Ring for a scheduled reminder; the popup is shown by the caller."""
+        if self._alarm_mode == self.ALARM_THREE_TIMES:
+            self._play_alarm_three_times()
+        else:
+            self._start_continuous_alarm()
+        self._send_system_notification(title, message)
+
+    def notify_reminder_missed(self, title: str, message: str):
+        """Quietly record a reminder that came due while the app was away."""
+        self._send_system_notification(title, message)
+
     def stop_alarm(self):
         """Stop the continuous alarm."""
         if self._alarm_timer:

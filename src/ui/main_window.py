@@ -12,13 +12,16 @@ from PyQt6.QtCore import Qt, QTimer, QEvent, QObject
 from PyQt6.QtGui import QIcon, QAction, QFont, QPixmap, QPainter, QColor, QBrush
 
 from src.data.database import Database
-from src.data.repositories import CategoryRepository, PresetRepository, TaskRepository
+from src.data.repositories import (
+    CategoryRepository, PresetRepository, TaskRepository, ReminderRepository
+)
 from src.core.timer_engine import TimerEngine
 from src.core.task_manager import TaskManager
 from src.core.preset_manager import PresetManager
 from src.core.statistics_engine import StatisticsEngine
 from src.core.notification_service import NotificationService, InAppNotificationDialog
-from src.models import Task, TaskStatus, Category, Preset
+from src.core.reminder_scheduler import ReminderScheduler
+from src.models import Task, TaskStatus, Category, Preset, Reminder
 from src.ui.components.timer_card import TimerCard, EditTimerDialog
 from src.ui.components.preset_bar import PresetBar, CustomTimerDialog, EditPresetDialog
 from src.ui.components.preset_manager_dialog import PresetManagerDialog
@@ -26,6 +29,9 @@ from src.ui.components.category_sidebar import CategorySidebar
 from src.ui.components.flow_layout import FlowLayout
 from src.ui.components.stats_dashboard import StatsDashboard
 from src.ui.components.task_notebook_dialog import TaskNotebookDialog
+from src.ui.components.reminder_panel import (
+    ReminderPanel, ReminderDialog, ReminderPopupDialog
+)
 from src.ui.styles import LIGHT_THEME, DARK_THEME
 
 
@@ -126,6 +132,7 @@ class MainWindow(QMainWindow):
         self.category_repo = CategoryRepository(db)
         self.preset_repo = PresetRepository(db)
         self.task_repo = TaskRepository(db)
+        self.reminder_repo = ReminderRepository(db)
 
         # Initialize engines
         self.timer_engine = TimerEngine(self)
@@ -133,9 +140,18 @@ class MainWindow(QMainWindow):
         self.preset_manager = PresetManager(db)
         self.stats_engine = StatisticsEngine(db)
         self.notification_service = NotificationService(self)
+        self.reminder_scheduler = ReminderScheduler(self.reminder_repo, self)
+
+        # Reminder popups are modal, so a second reminder coming due while one
+        # is on screen waits here instead of stacking nested event loops.
+        self._reminder_popup_open = False
+        self._pending_reminder_popups = []
 
         # Timer cards mapping
         self._timer_cards: Dict[int, TimerCard] = {}
+
+        # Built before the layout so the clock tick can always refresh it
+        self.reminder_panel = ReminderPanel()
 
         # Category cache
         self._categories: Dict[int, Category] = {}
@@ -154,6 +170,10 @@ class MainWindow(QMainWindow):
 
         # Restore saved preferences
         self._restore_preferences()
+
+        # Start the wall-clock reminder scheduler. Anything that came due while
+        # the app was closed is picked up on its first check.
+        self.reminder_scheduler.start()
 
         # Start stats update timer
         self._stats_timer = QTimer(self)
@@ -319,6 +339,14 @@ class MainWindow(QMainWindow):
             }
         """)
         toolbar_flow.addWidget(self.manage_btn)
+
+        # New scheduled reminder (a date + time, not a countdown)
+        self.reminder_btn = QPushButton("⏰ 定时提醒")
+        self.reminder_btn.setFixedHeight(32)
+        self.reminder_btn.setToolTip("在指定的日期和时间提醒你，可设置每天/工作日/每周重复")
+        self.reminder_btn.clicked.connect(self._on_create_reminder)
+        self.reminder_btn.setStyleSheet(self.manage_btn.styleSheet())
+        toolbar_flow.addWidget(self.reminder_btn)
 
         # Preset sort-mode toggle (smart auto-sort <-> manual drag order)
         self.sort_mode_btn = QPushButton()
@@ -544,6 +572,11 @@ class MainWindow(QMainWindow):
         self._list_drop_indicator.setStyleSheet("background-color: #007AFF; border-radius: 1px;")
         self._list_drop_indicator.hide()
 
+        # Scheduled reminders (date + time), between the timers and the stats
+        self.reminder_panel.set_collapsed(
+            self.db.get_setting("reminders_collapsed", "0") == "1")
+        scroll_layout.addWidget(self.reminder_panel)
+
         # Stats dashboard (below timer cards, scrollable)
         self.stats_dashboard = StatsDashboard(db=self.db)
         scroll_layout.addWidget(self.stats_dashboard)
@@ -752,6 +785,21 @@ class MainWindow(QMainWindow):
         # Notification service
         self.notification_service.show_popup.connect(self._show_popup)
 
+        # Reminder panel + scheduler
+        self.reminder_panel.create_requested.connect(self._on_create_reminder)
+        self.reminder_panel.edit_requested.connect(self._on_edit_reminder)
+        self.reminder_panel.delete_requested.connect(self._on_delete_reminder)
+        self.reminder_panel.toggle_requested.connect(
+            self.reminder_scheduler.set_enabled)
+        self.reminder_panel.clear_finished_requested.connect(
+            self._on_clear_finished_reminders)
+        self.reminder_panel.collapsed_changed.connect(
+            lambda collapsed: self.db.set_setting(
+                "reminders_collapsed", "1" if collapsed else "0"))
+        self.reminder_scheduler.reminders_changed.connect(self._refresh_reminders)
+        self.reminder_scheduler.reminder_due.connect(self._on_reminder_due)
+        self.reminder_scheduler.reminder_missed.connect(self._on_reminder_missed)
+
     def _load_data(self):
         """Load initial data."""
         # Load categories
@@ -759,6 +807,7 @@ class MainWindow(QMainWindow):
         for cat in categories:
             self._categories[cat.id] = cat
         self.sidebar.set_categories(categories)
+        self.reminder_panel.set_categories(categories)
 
         # Load presets (default + custom), applying the saved sort mode
         self._update_sort_mode_ui()
@@ -1037,6 +1086,7 @@ class MainWindow(QMainWindow):
             'exported_at': datetime.now().isoformat(),
             'categories': [c.to_dict() for c in self.category_repo.get_all()],
             'presets': [p.to_dict() for p in self.preset_repo.get_all()],
+            'reminders': [r.to_dict() for r in self.reminder_repo.get_all()],
             'settings': settings,
             'notebooks': notebooks,
         }
@@ -1092,7 +1142,8 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "导出配置",
             f"已导出 {len(data['presets'])} 个预设、{len(data['categories'])} 个分类、"
-            f"{len(data['notebooks'])} 篇笔记和全部设置到：\n{path}"
+            f"{len(data['reminders'])} 条定时提醒、{len(data['notebooks'])} 篇笔记"
+            f"和全部设置到：\n{path}"
         )
 
     def _on_import_config(self):
@@ -1171,6 +1222,25 @@ class MainWindow(QMainWindow):
                 ))
                 added += 1
 
+        # Merge reminders, deduped by title + scheduled time so re-importing
+        # the same backup doesn't pile up duplicates
+        existing_keys = {(r.title, r.remind_at.isoformat())
+                         for r in self.reminder_repo.get_all()}
+        reminders_added = 0
+        for r in data.get('reminders', []):
+            if not isinstance(r, dict) or not r.get('title') or not r.get('remind_at'):
+                continue
+            if (r['title'], r['remind_at']) in existing_keys:
+                continue
+            try:
+                reminder = Reminder.from_dict({**r, 'id': None})
+            except (KeyError, ValueError):
+                continue
+            reminder.category_id = id_map.get(r.get('category_id'), None)
+            self.reminder_repo.create(reminder)
+            existing_keys.add((r['title'], r['remind_at']))
+            reminders_added += 1
+
         # Merge notebooks: only fill in tasks whose local notebook is empty,
         # so existing local notes are never overwritten
         notebooks_added = 0
@@ -1193,13 +1263,16 @@ class MainWindow(QMainWindow):
         for cat in categories:
             self._categories[cat.id] = cat
         self.sidebar.set_categories(categories)
+        self.reminder_panel.set_categories(categories)
         self._refresh_presets()
         self._update_stats()
+        self.reminder_scheduler.reload()
 
         QMessageBox.information(
             self, "导入配置",
             f"导入完成：新增 {added} 个预设、更新 {updated} 个预设、新增 {new_cats} 个分类、"
-            f"导入 {notebooks_added} 篇笔记，并应用了 {len(settings)} 项设置。"
+            f"新增 {reminders_added} 条定时提醒、导入 {notebooks_added} 篇笔记，"
+            f"并应用了 {len(settings)} 项设置。"
         )
 
     def _apply_imported_settings(self, settings: dict):
@@ -1391,6 +1464,135 @@ class MainWindow(QMainWindow):
             self._move_card_to_front(task.id)
             self._refresh_presets_filtered()
 
+    # --- Scheduled reminders ---
+
+    def _refresh_reminders(self):
+        """Re-render the reminder list from the scheduler's current state."""
+        self.reminder_panel.set_reminders(self.reminder_scheduler.reminders)
+
+    def _on_create_reminder(self):
+        """Open the editor for a brand-new reminder."""
+        dialog = ReminderDialog(
+            list(self._categories.values()), parent=self, dark_mode=self._dark_mode)
+        if not dialog.exec():
+            return
+        result = dialog.get_result()
+        if not result:
+            return
+        self.reminder_scheduler.add(Reminder(
+            title=result['title'],
+            remind_at=result['remind_at'],
+            repeat=result['repeat'],
+            auto_start_minutes=result['auto_start_minutes'],
+            category_id=result['category_id'],
+            notes=result['notes'],
+        ).arm())
+        # A freshly created reminder is always visible, even if the panel was
+        # collapsed when the toolbar button was used.
+        self.reminder_panel.set_collapsed(False)
+        self.db.set_setting("reminders_collapsed", "0")
+
+    def _on_edit_reminder(self, reminder: Reminder):
+        """Edit an existing reminder, re-arming it if its time moved."""
+        dialog = ReminderDialog(
+            list(self._categories.values()), reminder=reminder,
+            parent=self, dark_mode=self._dark_mode)
+        if not dialog.exec():
+            return
+        result = dialog.get_result()
+        if not result:
+            return
+
+        rescheduled = (result['remind_at'] != reminder.remind_at
+                       or result['repeat'] != reminder.repeat)
+        reminder.title = result['title']
+        reminder.remind_at = result['remind_at']
+        reminder.repeat = result['repeat']
+        reminder.auto_start_minutes = result['auto_start_minutes']
+        reminder.category_id = result['category_id']
+        reminder.notes = result['notes']
+        if rescheduled:
+            # Moving the time means the user wants it to ring again, so drop
+            # the fire history that would otherwise mark it as done.
+            reminder.last_fired_at = None
+            reminder.snoozed_until = None
+            reminder.enabled = True
+            reminder.arm()
+        self.reminder_scheduler.update(reminder)
+
+    def _on_delete_reminder(self, reminder_id: int):
+        reminder = self.reminder_scheduler.get(reminder_id)
+        if not reminder:
+            return
+        resp = QMessageBox.question(
+            self, "删除提醒", f"确定删除提醒「{reminder.title}」吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if resp == QMessageBox.StandardButton.Yes:
+            self.reminder_scheduler.delete(reminder_id)
+
+    def _on_clear_finished_reminders(self):
+        count = self.reminder_scheduler.delete_finished()
+        if count:
+            self._refresh_reminders()
+
+    def _on_reminder_due(self, reminder: Reminder):
+        """A reminder came due: ring, optionally start its timer, show a popup."""
+        message = reminder.notes or reminder.remind_at.strftime("%m月%d日 %H:%M")
+        self.notification_service.notify_reminder(f"⏰ {reminder.title}", message)
+
+        if reminder.auto_start_minutes > 0:
+            self._start_reminder_timer(reminder)
+
+        self._queue_reminder_popup(reminder)
+
+    def _on_reminder_missed(self, reminder: Reminder):
+        """A reminder came due while the app was closed or the Mac asleep.
+
+        Recorded and reported without an alarm — ringing hours late is noise,
+        but silently swallowing it would be worse.
+        """
+        scheduled = reminder.remind_at.strftime("%m月%d日 %H:%M")
+        self.notification_service.notify_reminder_missed(
+            "错过的提醒", f"「{reminder.title}」原定于 {scheduled}")
+
+    def _start_reminder_timer(self, reminder: Reminder):
+        """Start the countdown a reminder is configured to kick off."""
+        category_id = reminder.category_id
+        if category_id not in self._categories:
+            category_id = next(iter(self._categories), 1)
+        task = self.task_manager.create_task(
+            name=reminder.title,
+            duration_seconds=reminder.auto_start_minutes * 60,
+            category_id=category_id,
+        )
+        self._create_timer_card(task)
+        self.task_manager.start_task(task.id)
+        self._move_card_to_front(task.id)
+
+    def _queue_reminder_popup(self, reminder: Reminder):
+        """Show the alarm popup, one at a time."""
+        if self._reminder_popup_open:
+            self._pending_reminder_popups.append(reminder)
+            return
+
+        self._reminder_popup_open = True
+        try:
+            self._show_window()
+            dialog = ReminderPopupDialog(
+                reminder, parent=self, dark_mode=self._dark_mode,
+                on_close_callback=self.notification_service.stop_alarm)
+            dialog.exec()
+            self.notification_service.stop_alarm()
+
+            minutes = dialog.snooze_minutes()
+            if minutes:
+                self.reminder_scheduler.snooze(reminder.id, minutes)
+        finally:
+            self._reminder_popup_open = False
+
+        if self._pending_reminder_popups:
+            self._queue_reminder_popup(self._pending_reminder_popups.pop(0))
+
     def _show_popup(self, title: str, message: str, task: Task):
         """Show in-app notification popup."""
         # Pass callback to stop alarm when dialog closes
@@ -1482,6 +1684,8 @@ class MainWindow(QMainWindow):
         weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
         weekday = weekdays[now.weekday()]
         self._clock_label.setText(now.strftime(f"%m月%d日 {weekday} %H:%M:%S"))
+        # Reminder countdowns tick on the same beat as the clock
+        self.reminder_panel.refresh_countdowns()
 
     def _restore_preferences(self):
         """Restore saved alarm mode and theme from database."""
@@ -1688,6 +1892,7 @@ class MainWindow(QMainWindow):
 
         self.save_config_btn.setStyleSheet(self.manage_btn.styleSheet())
         self.transfer_btn.setStyleSheet(self.manage_btn.styleSheet())
+        self.reminder_btn.setStyleSheet(self.manage_btn.styleSheet())
         self.sort_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
         self.view_mode_btn.setStyleSheet(self.manage_btn.styleSheet())
         self.font_btn.setStyleSheet(self.manage_btn.styleSheet())
@@ -1696,6 +1901,7 @@ class MainWindow(QMainWindow):
         self.sidebar.set_dark_mode(self._dark_mode)
         self.stats_dashboard.set_dark_mode(self._dark_mode)
         self.preset_bar.set_dark_mode(self._dark_mode)
+        self.reminder_panel.set_dark_mode(self._dark_mode)
         if self._dark_mode:
             self.preset_search_input.setStyleSheet("""
                 QLineEdit {
